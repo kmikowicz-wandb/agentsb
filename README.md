@@ -126,7 +126,6 @@ is created lazily on first `agentsb <AGENT>` invocation; no explicit
 | `-w PATH`, `--workspace`   | Dir bind-mounted at `/workspace`. Set at VM create time only.   |
 | `--ephemeral`              | Throwaway VM, destroyed on exit. ~2-4 min base boot each run.  |
 | `--with-claude-config`     | Copy a safe subset of host `~/.claude/` into the VM (claude only). |
-| `-y`, `--yes`              | Skip the confirmation prompt when installing a never-before-seen agent. |
 | `-h`, `--help`             | Help.                                                            |
 
 ### Environment
@@ -187,10 +186,9 @@ agentsb --reset
        script: |
          # install your agent so `<name>` is on PATH inside the VM
    ```
-2. Run `agentsb <name>`. The wrapper detects the new fragment, prompts
-   for confirmation (showing the script path), and runs the provision
-   inside the existing VM. No `--reset` or VM rebuild required.
-3. Pass `-y` to skip the prompt (useful in scripts or CI).
+2. Run `agentsb <name>`. The wrapper detects the new fragment and runs
+   the provision inside the existing VM. No `--reset` or VM rebuild
+   required.
 
 The install is in-place; VM state (existing agents, auth tokens,
 workspace edits) is preserved across agent additions.

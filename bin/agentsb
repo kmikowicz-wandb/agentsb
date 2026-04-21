@@ -127,40 +127,10 @@ def run_provision_fragment(vm: str, agent: str) -> None:
             die(f"agent '{agent}' provision failed (mode={mode}, block={idx})")
 
 
-def confirm_install(agent: str, auto_yes: bool) -> bool:
-    fragment = AGENTS_DIR / f"{agent}.yaml"
-    console.print(Panel(
-        f"[bold]{agent}[/bold] is not installed in this VM yet.\n\n"
-        f"On approval, agentsb will run the provision script at:\n"
-        f"  [cyan]{fragment}[/cyan]\n\n"
-        f"This installs a new binary inside the existing VM. The install\n"
-        f"runs in-place; existing VM state (auth tokens, other agents,\n"
-        f"workspace edits) is NOT wiped.\n\n"
-        f"Review the script before approving unfamiliar agents — the VM\n"
-        f"is the security boundary, but anything you approve to run inside\n"
-        f"it has full access to what's there.",
-        title="[yellow]Confirm agent install[/yellow]",
-        border_style="yellow",
-    ))
-    if auto_yes:
-        console.print("[dim]--yes given; proceeding without prompt.[/dim]")
-        return True
-    if not sys.stdin.isatty():
-        console.print(
-            "[red]Non-interactive shell; re-run with [bold]-y/--yes[/bold] "
-            "to approve.[/red]"
-        )
-        return False
-    answer = console.input("[yellow]Proceed with install? [y/N] [/yellow]").strip().lower()
-    return answer in ("y", "yes")
-
-
-def ensure_agent(vm: str, agent: str, auto_yes: bool) -> None:
+def ensure_agent(vm: str, agent: str) -> None:
     if agent_installed(vm, agent):
         return
-    if not confirm_install(agent, auto_yes):
-        die("aborted by user", code=130)
-    console.print(f"[cyan]Installing [bold]{agent}[/bold] into VM…[/cyan]")
+    console.print(f"[cyan]Installing [bold]{agent}[/bold] into VM (first use)…[/cyan]")
     run_provision_fragment(vm, agent)
     console.print(f"[green]✓[/green] {agent} installed")
 
@@ -220,8 +190,6 @@ def build_parser(agents: list[str]) -> argparse.ArgumentParser:
                    help="throwaway VM, destroyed on exit")
     p.add_argument("--with-claude-config", action="store_true",
                    help="copy safe subset of host ~/.claude/ into the VM")
-    p.add_argument("-y", "--yes", action="store_true",
-                   help="skip the confirmation prompt for installing a new agent")
     g = p.add_mutually_exclusive_group()
     g.add_argument("--shell", action="store_const", dest="mode", const="shell",
                    help="open interactive VM shell at /workspace")
@@ -267,7 +235,7 @@ def parse(argv: list[str], agents: list[str]) -> tuple[argparse.Namespace, str |
 
 def mode_run(ns, vm: str, agent: str, agent_args: list[str], workspace: Path) -> NoReturn:
     ensure_vm(vm, workspace)
-    ensure_agent(vm, agent, auto_yes=ns.yes)
+    ensure_agent(vm, agent)
     if ns.with_claude_config:
         sync_claude_config(vm)
     cmd = ["limactl", "shell", "--workdir", "/workspace", vm]

@@ -73,10 +73,9 @@ def test_parse_shell_mode_without_agent():
     assert args == []
 
 
-def test_parse_ephemeral_and_yes_flags():
-    ns, agent, args = _parse(["--ephemeral", "-y", "claude"])
+def test_parse_ephemeral_flag():
+    ns, agent, args = _parse(["--ephemeral", "claude"])
     assert ns.ephemeral is True
-    assert ns.yes is True
     assert agent == "claude"
 
 
