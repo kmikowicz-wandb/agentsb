@@ -75,8 +75,8 @@ def ensure_vm(vm: str, workspace: Path) -> None:
     if s == "Running":
         return
     if s == "Stopped":
-        with console.status(f"[cyan]Starting VM {vm}…[/cyan]", spinner="dots"):
-            subprocess.run(["limactl", "start", vm], check=True)
+        console.rule(f"[cyan]Starting VM {vm}[/cyan]")
+        subprocess.run(["limactl", "start", vm], check=True)
         return
     if s in ("", "Broken"):
         console.print(Panel.fit(
@@ -85,6 +85,7 @@ def ensure_vm(vm: str, workspace: Path) -> None:
             f"First boot ~2–4 min. Agents install on first use.",
             title="[cyan]agentsb[/cyan]", border_style="cyan",
         ))
+        console.rule(f"[cyan]limactl start (streaming)[/cyan]")
         subprocess.run(
             [
                 "limactl", "start", "--tty=false",
@@ -111,6 +112,7 @@ def run_provision_fragment(vm: str, agent: str) -> None:
     fragment = AGENTS_DIR / f"{agent}.yaml"
     data = yaml.safe_load(fragment.read_text()) or {}
     blocks = data.get("provision") or []
+    total = len(blocks)
     for idx, block in enumerate(blocks, start=1):
         mode = block.get("mode", "system")
         script = (block.get("script") or "").strip()
@@ -118,13 +120,12 @@ def run_provision_fragment(vm: str, agent: str) -> None:
             continue
         cmd = ["limactl", "shell", vm, "--"]
         cmd += ["sudo", "bash", "-s"] if mode == "system" else ["bash", "-s"]
-        label = f"{agent} [{idx}/{len(blocks)}] ({mode})"
-        with console.status(f"[cyan]Provisioning {label}…[/cyan]", spinner="dots"):
-            r = subprocess.run(cmd, input=script, text=True, capture_output=True)
+        console.rule(f"[cyan]Provisioning {agent} — step {idx}/{total} ({mode})[/cyan]")
+        # Stream stdout/stderr directly so the user sees apt/npm/curl progress
+        # instead of a silent spinner during multi-minute installs.
+        r = subprocess.run(cmd, input=script, text=True)
         if r.returncode != 0:
-            console.print(r.stdout)
-            console.print(r.stderr)
-            die(f"agent '{agent}' provision failed (mode={mode}, block={idx})")
+            die(f"agent '{agent}' provision failed (mode={mode}, block={idx}/{total})")
 
 
 def ensure_agent(vm: str, agent: str) -> None:
@@ -147,12 +148,13 @@ def sync_claude_config(vm: str) -> None:
         ["limactl", "shell", vm, "--", "mkdir", "-p", ".claude"],
         check=True, capture_output=True,
     )
-    with console.status("[cyan]Syncing ~/.claude subset into VM…[/cyan]", spinner="dots"):
-        for src in present:
-            subprocess.run(
-                ["limactl", "copy", "-r", str(src), f"{vm}:.claude/"],
-                check=True, capture_output=True,
-            )
+    console.print("[cyan]Syncing ~/.claude subset into VM…[/cyan]")
+    for src in present:
+        subprocess.run(
+            ["limactl", "copy", "-r", str(src), f"{vm}:.claude/"],
+            check=True, capture_output=True,
+        )
+    console.print("[green]✓[/green] ~/.claude subset synced")
 
 
 def forwarded_env_pairs() -> list[str]:
