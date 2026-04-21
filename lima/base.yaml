@@ -1,0 +1,94 @@
+# agentsb base template — shared VM config for all agent templates.
+# Per-agent templates in this directory inherit from this via `base:`.
+#
+# Security invariants that live here (don't override in children):
+#   - Host $HOME is NOT mounted. Only WORKSPACE is visible inside the VM.
+#   - ssh.loadDotSSHPubKeys: false — host SSH pubkeys don't leak into the VM.
+#   - Egress firewall: iptables OUTPUT policy DROP, only DNS/HTTP/HTTPS/SSH out.
+#   - Native ARM only (rosetta: false) for speed and to surface arch bugs early.
+
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+
+vmType: "vz"
+vmOpts:
+  vz:
+    rosetta:
+      enabled: false
+      binfmt: false
+
+cpus: 2
+memory: "4GiB"
+disk: "20GiB"
+
+param:
+  WORKSPACE: "/tmp"
+
+mounts:
+  - location: "{{.Param.WORKSPACE}}"
+    mountPoint: "/workspace"
+    writable: true
+
+mountType: "virtiofs"
+
+portForwards: []
+
+ssh:
+  loadDotSSHPubKeys: false
+
+containerd:
+  user: false
+  system: false
+
+provision:
+  # --- Base packages, Node.js, uv, egress firewall ----------------------
+  - mode: system
+    script: |
+      #!/usr/bin/env bash
+      set -euxo pipefail
+      export DEBIAN_FRONTEND=noninteractive
+
+      apt-get update
+      apt-get install -y --no-install-recommends \
+        ca-certificates curl git build-essential \
+        python3 python3-pip python3-venv \
+        jq ripgrep less \
+        iptables iptables-persistent
+
+      # Node.js 22 LTS from NodeSource — claude-code and codex both need it.
+      curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+      apt-get install -y --no-install-recommends nodejs
+
+      # uv system-wide, so per-user shims don't need to know individual paths.
+      curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+
+      apt-get clean
+      rm -rf /var/lib/apt/lists/*
+
+      # --- Egress firewall ------------------------------------------------
+      # Port-level allowlist only. For per-hostname enforcement, run a
+      # filtering HTTPS proxy on the host and set HTTPS_PROXY in the VM.
+      iptables -F OUTPUT
+      iptables -P OUTPUT DROP
+      iptables -A OUTPUT -o lo -j ACCEPT
+      iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+      iptables -A OUTPUT -p udp --dport 53  -j ACCEPT   # DNS
+      iptables -A OUTPUT -p tcp --dport 53  -j ACCEPT
+      iptables -A OUTPUT -p tcp --dport 80  -j ACCEPT   # HTTP
+      iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT   # HTTPS
+      iptables -A OUTPUT -p tcp --dport 22  -j ACCEPT   # git+ssh
+
+      iptables -P INPUT DROP
+      iptables -A INPUT -i lo -j ACCEPT
+      iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+      netfilter-persistent save
+
+  - mode: user
+    script: |
+      #!/usr/bin/env bash
+      set -euxo pipefail
+      mkdir -p "$HOME/.claude" "$HOME/.cache" "$HOME/.npm"

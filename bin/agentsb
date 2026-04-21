@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# agentsb — run a coding agent inside an isolated Lima VM
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+AGENTSB_HOME="${AGENTSB_HOME:-$(cd "$SCRIPT_DIR/.." && pwd -P)}"
+LIMA_DIR="$AGENTSB_HOME/lima"
+WORKSPACE="$PWD"
+MODE=run
+EPHEMERAL=0
+WITH_CLAUDE_CONFIG=0
+
+list_agents() {
+    [[ -d "$LIMA_DIR" ]] || return
+    for f in "$LIMA_DIR"/*.yaml; do
+        local n
+        n="$(basename "$f" .yaml)"
+        [[ "$n" == "base" ]] && continue
+        printf '%s ' "$n"
+    done
+}
+
+usage() {
+    cat <<EOF
+usage: agentsb [flags] AGENT [agent-args...]
+
+Run AGENT inside its isolated Lima VM. Only the workspace directory is
+bind-mounted; the host filesystem (\$HOME, Keychain, ~/.ssh) is unreachable.
+Egress is restricted to DNS/HTTP/HTTPS/SSH.
+
+Agents available: $(list_agents)
+
+Modes (applied to AGENT's VM):
+  (default)          run AGENT (starts VM if needed)
+  --shell            open interactive VM shell at /workspace
+  --start            start/create the VM and exit
+  --stop             stop the VM
+  --reset            destroy and recreate the VM
+  --status           show VM status
+
+Options:
+  -w, --workspace PATH      directory bind-mounted at /workspace (default: \$PWD)
+                            used at VM-create time; persists thereafter
+      --ephemeral           throwaway VM, destroyed on exit (pays ~2-5 min
+                            provision each run; good for risky one-offs)
+      --with-claude-config  copy a safe subset of host ~/.claude/ into the
+                            VM before running: CLAUDE.md, commands/, agents/,
+                            plugins/, settings.json. Only meaningful for
+                            agent=claude.
+  -h, --help                show this help
+
+Environment:
+  AGENTSB_VM         override VM name (default: agentsb-<AGENT>)
+  AGENTSB_HOME       installation directory (default: parent of bin/)
+
+Env vars forwarded into the VM (when set on the host):
+  ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN,
+  OPENAI_API_KEY, NO_COLOR, TERM
+EOF
+}
+
+die() { echo "agentsb: $*" >&2; exit 1; }
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -w|--workspace)        WORKSPACE="$2"; shift 2 ;;
+        --ephemeral)           EPHEMERAL=1; shift ;;
+        --with-claude-config)  WITH_CLAUDE_CONFIG=1; shift ;;
+        --shell)               MODE=shell;  shift ;;
+        --start)               MODE=start;  shift ;;
+        --stop)                MODE=stop;   shift ;;
+        --reset)               MODE=reset;  shift ;;
+        --status)              MODE=status; shift ;;
+        -h|--help)             usage; exit 0 ;;
+        --)                    shift; break ;;
+        -*)                    die "unknown flag: $1" ;;
+        *)                     break ;;
+    esac
+done
+
+[[ $# -ge 1 ]] || { usage >&2; exit 2; }
+AGENT="$1"; shift
+
+TEMPLATE="$LIMA_DIR/$AGENT.yaml"
+[[ -f "$TEMPLATE" ]] || die "unknown agent: '$AGENT' (available: $(list_agents))"
+[[ "$AGENT" == "base" ]] && die "'base' is a shared template, not an agent"
+
+command -v limactl >/dev/null || die "limactl not found — install with: brew install lima"
+WORKSPACE="$(cd "$WORKSPACE" 2>/dev/null && pwd -P)" || die "workspace not accessible: $WORKSPACE"
+
+if [[ $EPHEMERAL -eq 1 ]]; then
+    VM_NAME="agentsb-eph-$AGENT-$(date +%s)-$$"
+    trap 'limactl delete -f "$VM_NAME" >/dev/null 2>&1 || true' EXIT
+else
+    VM_NAME="${AGENTSB_VM:-agentsb-$AGENT}"
+fi
+
+vm_status() {
+    limactl list --format '{{.Status}}' "$VM_NAME" 2>/dev/null | head -1
+}
+
+ensure_vm() {
+    local s
+    s="$(vm_status)"
+    case "$s" in
+        Running) : ;;
+        Stopped)
+            limactl start "$VM_NAME" >&2
+            ;;
+        ""|Broken)
+            echo "agentsb: creating VM '$VM_NAME' for agent '$AGENT' (first boot: ~2-5 min)" >&2
+            limactl start --tty=false \
+                --name "$VM_NAME" \
+                --set ".param.WORKSPACE = \"$WORKSPACE\"" \
+                "$TEMPLATE" >&2
+            ;;
+        *) die "VM in unexpected state: $s" ;;
+    esac
+}
+
+sync_claude_config() {
+    [[ -d "$HOME/.claude" ]] || return 0
+    local items=(CLAUDE.md commands agents plugins settings.json)
+    local present=()
+    for item in "${items[@]}"; do
+        [[ -e "$HOME/.claude/$item" ]] && present+=( "$HOME/.claude/$item" )
+    done
+    [[ ${#present[@]} -gt 0 ]] || return 0
+    limactl shell "$VM_NAME" -- mkdir -p .claude
+    for src in "${present[@]}"; do
+        limactl copy -r "$src" "$VM_NAME:.claude/" >/dev/null
+    done
+}
+
+case "$MODE" in
+    status)
+        vm_status || true
+        ;;
+    start)
+        ensure_vm
+        ;;
+    stop)
+        limactl stop "$VM_NAME"
+        ;;
+    reset)
+        limactl delete -f "$VM_NAME" 2>/dev/null || true
+        ensure_vm
+        ;;
+    shell)
+        ensure_vm
+        [[ $WITH_CLAUDE_CONFIG -eq 1 ]] && sync_claude_config
+        exec limactl shell --workdir /workspace "$VM_NAME"
+        ;;
+    run)
+        ensure_vm
+        [[ $WITH_CLAUDE_CONFIG -eq 1 ]] && sync_claude_config
+        env_args=()
+        for v in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN OPENAI_API_KEY NO_COLOR TERM; do
+            if [[ -n "${!v:-}" ]]; then
+                env_args+=( "$v=${!v}" )
+            fi
+        done
+        if [[ ${#env_args[@]} -gt 0 ]]; then
+            exec limactl shell --workdir /workspace "$VM_NAME" env "${env_args[@]}" "$AGENT" "$@"
+        else
+            exec limactl shell --workdir /workspace "$VM_NAME" "$AGENT" "$@"
+        fi
+        ;;
+esac
