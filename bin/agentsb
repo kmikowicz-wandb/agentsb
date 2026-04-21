@@ -1,169 +1,332 @@
-#!/usr/bin/env bash
-# agentsb — run a coding agent inside an isolated Lima VM
-set -euo pipefail
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "rich>=13.7",
+#     "pyyaml>=6.0",
+# ]
+# ///
+"""agentsb — run coding agents in isolated Lima VMs.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-AGENTSB_HOME="${AGENTSB_HOME:-$(cd "$SCRIPT_DIR/.." && pwd -P)}"
-LIMA_DIR="$AGENTSB_HOME/lima"
-WORKSPACE="$PWD"
-MODE=run
-EPHEMERAL=0
-WITH_CLAUDE_CONFIG=0
+One shared `agentsb` Lima VM. The VM itself only has the base tools (node,
+uv, firewall). Each agent is installed on first invocation and cached for
+subsequent runs. Adding a new agent is: drop a provision fragment in
+lima/agents/<name>.yaml; next `agentsb <name>` will install it.
+"""
+from __future__ import annotations
 
-list_agents() {
-    [[ -d "$LIMA_DIR" ]] || return
-    for f in "$LIMA_DIR"/*.yaml; do
-        local n
-        n="$(basename "$f" .yaml)"
-        [[ "$n" == "base" ]] && continue
-        printf '%s ' "$n"
-    done
-}
+import argparse
+import atexit
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import NoReturn
 
-usage() {
-    cat <<EOF
-usage: agentsb [flags] AGENT [agent-args...]
+import yaml
+from rich.console import Console
+from rich.panel import Panel
 
-Run AGENT inside its isolated Lima VM. Only the workspace directory is
-bind-mounted; the host filesystem (\$HOME, Keychain, ~/.ssh) is unreachable.
-Egress is restricted to DNS/HTTP/HTTPS/SSH.
+SCRIPT_DIR = Path(__file__).resolve().parent
+AGENTSB_HOME = Path(os.environ.get("AGENTSB_HOME") or SCRIPT_DIR.parent).resolve()
+LIMA_DIR = AGENTSB_HOME / "lima"
+AGENTS_DIR = LIMA_DIR / "agents"
+BASE_TEMPLATE = LIMA_DIR / "base.yaml"
 
-Agents available: $(list_agents)
+FORWARDED_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "OPENAI_API_KEY",
+    "NO_COLOR",
+    "TERM",
+)
 
-Modes (applied to AGENT's VM):
-  (default)          run AGENT (starts VM if needed)
-  --shell            open interactive VM shell at /workspace
-  --start            start/create the VM and exit
-  --stop             stop the VM
-  --reset            destroy and recreate the VM
-  --status           show VM status
+console = Console(stderr=True, highlight=False)
 
-Options:
-  -w, --workspace PATH      directory bind-mounted at /workspace (default: \$PWD)
-                            used at VM-create time; persists thereafter
-      --ephemeral           throwaway VM, destroyed on exit (pays ~2-5 min
-                            provision each run; good for risky one-offs)
-      --with-claude-config  copy a safe subset of host ~/.claude/ into the
-                            VM before running: CLAUDE.md, commands/, agents/,
-                            plugins/, settings.json. Only meaningful for
-                            agent=claude.
-  -h, --help                show this help
 
-Environment:
-  AGENTSB_VM         override VM name (default: agentsb-<AGENT>)
-  AGENTSB_HOME       installation directory (default: parent of bin/)
+def die(msg: str, code: int = 1) -> NoReturn:
+    console.print(f"[red]agentsb:[/red] {msg}")
+    sys.exit(code)
 
-Env vars forwarded into the VM (when set on the host):
-  ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN,
-  OPENAI_API_KEY, NO_COLOR, TERM
-EOF
-}
 
-die() { echo "agentsb: $*" >&2; exit 1; }
+def list_agents() -> list[str]:
+    if not AGENTS_DIR.exists():
+        return []
+    return sorted(p.stem for p in AGENTS_DIR.glob("*.yaml"))
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -w|--workspace)        WORKSPACE="$2"; shift 2 ;;
-        --ephemeral)           EPHEMERAL=1; shift ;;
-        --with-claude-config)  WITH_CLAUDE_CONFIG=1; shift ;;
-        --shell)               MODE=shell;  shift ;;
-        --start)               MODE=start;  shift ;;
-        --stop)                MODE=stop;   shift ;;
-        --reset)               MODE=reset;  shift ;;
-        --status)              MODE=status; shift ;;
-        -h|--help)             usage; exit 0 ;;
-        --)                    shift; break ;;
-        -*)                    die "unknown flag: $1" ;;
-        *)                     break ;;
-    esac
-done
 
-[[ $# -ge 1 ]] || { usage >&2; exit 2; }
-AGENT="$1"; shift
+def lima_status(vm: str) -> str:
+    """Return 'Running' / 'Stopped' / 'Broken' / '' (missing)."""
+    r = subprocess.run(
+        ["limactl", "list", "--format", "{{.Status}}", vm],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0 or not r.stdout.strip():
+        return ""
+    return r.stdout.strip().splitlines()[0]
 
-TEMPLATE="$LIMA_DIR/$AGENT.yaml"
-[[ -f "$TEMPLATE" ]] || die "unknown agent: '$AGENT' (available: $(list_agents))"
-[[ "$AGENT" == "base" ]] && die "'base' is a shared template, not an agent"
 
-command -v limactl >/dev/null || die "limactl not found — install with: brew install lima"
-WORKSPACE="$(cd "$WORKSPACE" 2>/dev/null && pwd -P)" || die "workspace not accessible: $WORKSPACE"
+def ensure_vm(vm: str, workspace: Path) -> None:
+    s = lima_status(vm)
+    if s == "Running":
+        return
+    if s == "Stopped":
+        with console.status(f"[cyan]Starting VM {vm}…[/cyan]", spinner="dots"):
+            subprocess.run(["limactl", "start", vm], check=True)
+        return
+    if s in ("", "Broken"):
+        console.print(Panel.fit(
+            f"Creating VM  [bold]{vm}[/bold]\n"
+            f"Workspace    [bold]{workspace}[/bold]\n"
+            f"First boot ~2–4 min. Agents install on first use.",
+            title="[cyan]agentsb[/cyan]", border_style="cyan",
+        ))
+        subprocess.run(
+            [
+                "limactl", "start", "--tty=false",
+                "--name", vm,
+                "--set", f'.param.WORKSPACE = "{workspace}"',
+                str(BASE_TEMPLATE),
+            ],
+            check=True,
+        )
+        return
+    die(f"VM in unexpected state: {s}")
 
-if [[ $EPHEMERAL -eq 1 ]]; then
-    VM_NAME="agentsb-eph-$AGENT-$(date +%s)-$$"
-    trap 'limactl delete -f "$VM_NAME" >/dev/null 2>&1 || true' EXIT
-else
-    VM_NAME="${AGENTSB_VM:-agentsb-$AGENT}"
-fi
 
-vm_status() {
-    limactl list --format '{{.Status}}' "$VM_NAME" 2>/dev/null | head -1
-}
+def agent_installed(vm: str, agent: str) -> bool:
+    r = subprocess.run(
+        ["limactl", "shell", vm, "--",
+         "sh", "-c", f"command -v {shlex.quote(agent)} >/dev/null"],
+        capture_output=True,
+    )
+    return r.returncode == 0
 
-ensure_vm() {
-    local s
-    s="$(vm_status)"
-    case "$s" in
-        Running) : ;;
-        Stopped)
-            limactl start "$VM_NAME" >&2
-            ;;
-        ""|Broken)
-            echo "agentsb: creating VM '$VM_NAME' for agent '$AGENT' (first boot: ~2-5 min)" >&2
-            limactl start --tty=false \
-                --name "$VM_NAME" \
-                --set ".param.WORKSPACE = \"$WORKSPACE\"" \
-                "$TEMPLATE" >&2
-            ;;
-        *) die "VM in unexpected state: $s" ;;
-    esac
-}
 
-sync_claude_config() {
-    [[ -d "$HOME/.claude" ]] || return 0
-    local items=(CLAUDE.md commands agents plugins settings.json)
-    local present=()
-    for item in "${items[@]}"; do
-        [[ -e "$HOME/.claude/$item" ]] && present+=( "$HOME/.claude/$item" )
-    done
-    [[ ${#present[@]} -gt 0 ]] || return 0
-    limactl shell "$VM_NAME" -- mkdir -p .claude
-    for src in "${present[@]}"; do
-        limactl copy -r "$src" "$VM_NAME:.claude/" >/dev/null
-    done
-}
+def run_provision_fragment(vm: str, agent: str) -> None:
+    fragment = AGENTS_DIR / f"{agent}.yaml"
+    data = yaml.safe_load(fragment.read_text()) or {}
+    blocks = data.get("provision") or []
+    for idx, block in enumerate(blocks, start=1):
+        mode = block.get("mode", "system")
+        script = (block.get("script") or "").strip()
+        if not script:
+            continue
+        cmd = ["limactl", "shell", vm, "--"]
+        cmd += ["sudo", "bash", "-s"] if mode == "system" else ["bash", "-s"]
+        label = f"{agent} [{idx}/{len(blocks)}] ({mode})"
+        with console.status(f"[cyan]Provisioning {label}…[/cyan]", spinner="dots"):
+            r = subprocess.run(cmd, input=script, text=True, capture_output=True)
+        if r.returncode != 0:
+            console.print(r.stdout)
+            console.print(r.stderr)
+            die(f"agent '{agent}' provision failed (mode={mode}, block={idx})")
 
-case "$MODE" in
-    status)
-        vm_status || true
-        ;;
-    start)
-        ensure_vm
-        ;;
-    stop)
-        limactl stop "$VM_NAME"
-        ;;
-    reset)
-        limactl delete -f "$VM_NAME" 2>/dev/null || true
-        ensure_vm
-        ;;
-    shell)
-        ensure_vm
-        [[ $WITH_CLAUDE_CONFIG -eq 1 ]] && sync_claude_config
-        exec limactl shell --workdir /workspace "$VM_NAME"
-        ;;
-    run)
-        ensure_vm
-        [[ $WITH_CLAUDE_CONFIG -eq 1 ]] && sync_claude_config
-        env_args=()
-        for v in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN OPENAI_API_KEY NO_COLOR TERM; do
-            if [[ -n "${!v:-}" ]]; then
-                env_args+=( "$v=${!v}" )
-            fi
-        done
-        if [[ ${#env_args[@]} -gt 0 ]]; then
-            exec limactl shell --workdir /workspace "$VM_NAME" env "${env_args[@]}" "$AGENT" "$@"
-        else
-            exec limactl shell --workdir /workspace "$VM_NAME" "$AGENT" "$@"
-        fi
-        ;;
-esac
+
+def confirm_install(agent: str, auto_yes: bool) -> bool:
+    fragment = AGENTS_DIR / f"{agent}.yaml"
+    console.print(Panel(
+        f"[bold]{agent}[/bold] is not installed in this VM yet.\n\n"
+        f"On approval, agentsb will run the provision script at:\n"
+        f"  [cyan]{fragment}[/cyan]\n\n"
+        f"This installs a new binary inside the existing VM. The install\n"
+        f"runs in-place; existing VM state (auth tokens, other agents,\n"
+        f"workspace edits) is NOT wiped.\n\n"
+        f"Review the script before approving unfamiliar agents — the VM\n"
+        f"is the security boundary, but anything you approve to run inside\n"
+        f"it has full access to what's there.",
+        title="[yellow]Confirm agent install[/yellow]",
+        border_style="yellow",
+    ))
+    if auto_yes:
+        console.print("[dim]--yes given; proceeding without prompt.[/dim]")
+        return True
+    if not sys.stdin.isatty():
+        console.print(
+            "[red]Non-interactive shell; re-run with [bold]-y/--yes[/bold] "
+            "to approve.[/red]"
+        )
+        return False
+    answer = console.input("[yellow]Proceed with install? [y/N] [/yellow]").strip().lower()
+    return answer in ("y", "yes")
+
+
+def ensure_agent(vm: str, agent: str, auto_yes: bool) -> None:
+    if agent_installed(vm, agent):
+        return
+    if not confirm_install(agent, auto_yes):
+        die("aborted by user", code=130)
+    console.print(f"[cyan]Installing [bold]{agent}[/bold] into VM…[/cyan]")
+    run_provision_fragment(vm, agent)
+    console.print(f"[green]✓[/green] {agent} installed")
+
+
+def sync_claude_config(vm: str) -> None:
+    src_root = Path.home() / ".claude"
+    if not src_root.is_dir():
+        return
+    items = ("CLAUDE.md", "commands", "agents", "plugins", "settings.json")
+    present = [src_root / i for i in items if (src_root / i).exists()]
+    if not present:
+        return
+    subprocess.run(
+        ["limactl", "shell", vm, "--", "mkdir", "-p", ".claude"],
+        check=True, capture_output=True,
+    )
+    with console.status("[cyan]Syncing ~/.claude subset into VM…[/cyan]", spinner="dots"):
+        for src in present:
+            subprocess.run(
+                ["limactl", "copy", "-r", str(src), f"{vm}:.claude/"],
+                check=True, capture_output=True,
+            )
+
+
+def forwarded_env_pairs() -> list[str]:
+    return [f"{k}={os.environ[k]}" for k in FORWARDED_ENV if os.environ.get(k)]
+
+
+# ---- argument splitting -------------------------------------------------
+
+def split_argv(argv: list[str], agents: list[str]) -> tuple[list[str], str | None, list[str]]:
+    """Separate wrapper args from (agent, agent_args).
+
+    Strategy: run argparse's parse_known_args on everything, then the first
+    entry of `rest` that matches a known agent is the agent; anything after
+    is the agent's args. Anything in `rest` before the agent is an unknown
+    wrapper flag (error).
+    """
+    # We'll return the full argv for argparse to parse, then post-process.
+    return argv, None, []
+
+
+def build_parser(agents: list[str]) -> argparse.ArgumentParser:
+    agents_line = ", ".join(agents) if agents else "(none configured)"
+    p = argparse.ArgumentParser(
+        prog="agentsb",
+        description=(
+            "Run coding agents in an isolated Lima VM. One shared VM with lazy "
+            "agent install; each agent's install runs on its first invocation."
+        ),
+        epilog=f"Agents available: {agents_line}",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("-w", "--workspace", default=os.getcwd(),
+                   help="directory bind-mounted at /workspace (default: $PWD)")
+    p.add_argument("--ephemeral", action="store_true",
+                   help="throwaway VM, destroyed on exit")
+    p.add_argument("--with-claude-config", action="store_true",
+                   help="copy safe subset of host ~/.claude/ into the VM")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="skip the confirmation prompt for installing a new agent")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--shell", action="store_const", dest="mode", const="shell",
+                   help="open interactive VM shell at /workspace")
+    g.add_argument("--stop", action="store_const", dest="mode", const="stop",
+                   help="stop the VM")
+    g.add_argument("--reset", action="store_const", dest="mode", const="reset",
+                   help="destroy and recreate the VM")
+    g.add_argument("--status", action="store_const", dest="mode", const="status",
+                   help="show VM status")
+    p.set_defaults(mode="run")
+    return p
+
+
+def parse(argv: list[str], agents: list[str]) -> tuple[argparse.Namespace, str | None, list[str]]:
+    parser = build_parser(agents)
+    ns, rest = parser.parse_known_args(argv)
+
+    agent: str | None = None
+    agent_idx: int | None = None
+    for i, tok in enumerate(rest):
+        if tok in agents:
+            agent = tok
+            agent_idx = i
+            break
+
+    if agent_idx is None:
+        stray = [t for t in rest if t != "--"]
+        if stray:
+            die(f"unknown flag or agent: {stray[0]!r} (agents: {', '.join(agents)})")
+        return ns, None, []
+
+    before = [t for t in rest[:agent_idx] if t != "--"]
+    if before:
+        die(f"unknown flag: {before[0]!r}")
+
+    agent_args = rest[agent_idx + 1:]
+    if agent_args and agent_args[0] == "--":
+        agent_args = agent_args[1:]
+    return ns, agent, agent_args
+
+
+# ---- modes --------------------------------------------------------------
+
+def mode_run(ns, vm: str, agent: str, agent_args: list[str], workspace: Path) -> NoReturn:
+    ensure_vm(vm, workspace)
+    ensure_agent(vm, agent, auto_yes=ns.yes)
+    if ns.with_claude_config:
+        sync_claude_config(vm)
+    cmd = ["limactl", "shell", "--workdir", "/workspace", vm]
+    env_pairs = forwarded_env_pairs()
+    if env_pairs:
+        cmd += ["env", *env_pairs]
+    cmd += [agent, *agent_args]
+    os.execvp(cmd[0], cmd)
+
+
+def mode_shell(ns, vm: str, workspace: Path) -> NoReturn:
+    ensure_vm(vm, workspace)
+    if ns.with_claude_config:
+        sync_claude_config(vm)
+    os.execvp("limactl", ["limactl", "shell", "--workdir", "/workspace", vm])
+
+
+def mode_reset(vm: str, workspace: Path) -> None:
+    subprocess.run(["limactl", "delete", "-f", vm], capture_output=True)
+    ensure_vm(vm, workspace)
+
+
+def main() -> int:
+    agents = list_agents()
+    ns, agent, agent_args = parse(sys.argv[1:], agents)
+
+    if not BASE_TEMPLATE.exists():
+        die(f"template missing: {BASE_TEMPLATE}")
+    if not shutil.which("limactl"):
+        die("limactl not found — install with: brew install lima")
+
+    workspace = Path(ns.workspace).expanduser().resolve()
+    if not workspace.is_dir():
+        die(f"workspace not accessible: {workspace}")
+
+    if ns.ephemeral:
+        vm = f"agentsb-eph-{int(time.time())}-{os.getpid()}"
+        atexit.register(
+            lambda: subprocess.run(["limactl", "delete", "-f", vm], capture_output=True)
+        )
+    else:
+        vm = os.environ.get("AGENTSB_VM", "agentsb")
+
+    mode = ns.mode
+    if mode == "run":
+        if agent is None:
+            die("AGENT required. Run `agentsb --help` for usage.", code=2)
+        mode_run(ns, vm, agent, agent_args, workspace)
+    elif mode == "shell":
+        mode_shell(ns, vm, workspace)
+    elif mode == "stop":
+        subprocess.run(["limactl", "stop", vm])
+    elif mode == "reset":
+        mode_reset(vm, workspace)
+    elif mode == "status":
+        print(lima_status(vm) or "(no VM)")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
