@@ -1,0 +1,18 @@
+# Provision fragment: install Aider via a uvx shim.
+# Not standalone; composed into lima/agentsb.yaml via `base:`.
+provision:
+  - mode: system
+    script: |
+      #!/usr/bin/env bash
+      set -euxo pipefail
+      cat >/usr/local/bin/aider <<'EOF'
+      #!/bin/sh
+      exec uvx --from aider-chat aider "$@"
+      EOF
+      chmod +x /usr/local/bin/aider
+  - mode: user
+    script: |
+      #!/usr/bin/env bash
+      set -euxo pipefail
+      # Warm the uvx cache so first interactive run is instant.
+      uvx --from aider-chat aider --version >/dev/null

@@ -1,0 +1,11 @@
+# Provision fragment: install ForgeCode.
+# Not standalone; composed into lima/agentsb.yaml via `base:`.
+provision:
+  - mode: user
+    script: |
+      #!/usr/bin/env bash
+      set -euxo pipefail
+      curl -fsSL https://forgecode.dev/cli | sh
+      # Ensure ~/.local/bin is on PATH for non-login shells too.
+      grep -q '.local/bin' "$HOME/.bashrc" || \
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
