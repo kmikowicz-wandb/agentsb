@@ -71,6 +71,7 @@ provision:
       # --- Egress firewall ------------------------------------------------
       # Port-level allowlist only. For per-hostname enforcement, run a
       # filtering HTTPS proxy on the host and set HTTPS_PROXY in the VM.
+      # OUTBOUND (egress) is the meaningful direction for this sandbox.
       iptables -F OUTPUT
       iptables -P OUTPUT DROP
       iptables -A OUTPUT -o lo -j ACCEPT
@@ -81,9 +82,11 @@ provision:
       iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT   # HTTPS
       iptables -A OUTPUT -p tcp --dport 22  -j ACCEPT   # git+ssh
 
-      iptables -P INPUT DROP
-      iptables -A INPUT -i lo -j ACCEPT
-      iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+      # INBOUND is left wide open on purpose: the VM lives behind Lima's NAT
+      # and is only reachable by the host. Locking INPUT down breaks
+      # `limactl shell` (which is SSH from the host — a *new* inbound
+      # connection; ESTABLISHED/RELATED does not match it) and the VM
+      # becomes unreachable once the policy takes effect.
 
       netfilter-persistent save
 
