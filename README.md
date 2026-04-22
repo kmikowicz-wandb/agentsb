@@ -1,9 +1,35 @@
 # agentsb
 
-Run coding agents (Claude Code, Codex, Aider, Forge) inside isolated Lima VMs
-on macOS. Reduces the blast radius of prompt-injection attacks by keeping the
+Are you tired of hitting "Yes" on parallel codex sessions? Do
+you hate managing global and fine grained shell allowlists like
+a sysadmin from the 20th century? Do you wish that you could run "--dangerously-skip-permissions"
+without worrying about your coding agents providing a RCE vector
+for criminals?
+
+Coding agents ship their own permissions systems for interacting
+with your host system. You rely on the validity of that system
+to design good security profiles, and are bound to its security UX.
+Most coding agents could safely complete their work in a thin
+container. On Linux you could build a firejail or bubblejail
+around your workspaces.
+
+Unfortunately we sometimes have to work on Mac OS which doesn't
+support containers in the big 26.  Codex comes close to a sane solution using "Sandbox mode"
+implemented over Seatbelt. Seatbelt is deprecated.
+
+This project takes a different approach. Run coding agents (Claude Code, Codex, Aider, Forge) inside isolated Lima VMs
+on macOS. Reduce the blast radius of prompt-injection attacks by keeping the
 agent away from your host `$HOME`, Keychain, SSH keys, and arbitrary network
 destinations.
+
+# Features
+* Secure base VM
+* Supports popular coding agents
+* VM reuse across parent directories
+
+## Future features
+* GPU sharing support
+* Hardware sharing support
 
 ## Threat model
 
@@ -47,27 +73,8 @@ What it does **not** give you:
 
 ## Install
 
-Modern Homebrew (4.x+) requires formulae to live in a tap. One-time setup:
-
 ```sh
-# 1. Make the project a git repo (head formulas clone from git)
-cd ~/Development/agentsb
-git init && git add . && git commit -m "initial"
-
-# 2. Register a local tap that points at this formula
-TAP_DIR="$(brew --repository)/Library/Taps/kmikowicz/homebrew-agentsb"
-mkdir -p "$TAP_DIR/Formula"
-ln -sf "$PWD/Formula/agentsb.rb" "$TAP_DIR/Formula/agentsb.rb"
-
-# 3. Install
-brew install --HEAD kmikowicz/agentsb/agentsb
-```
-
-After edits, commit and reinstall:
-
-```sh
-git commit -am wip
-brew reinstall --HEAD kmikowicz/agentsb/agentsb
+brew install kmikowicz/agentsb/agentsb
 ```
 
 The formula installs:
@@ -193,32 +200,6 @@ agentsb --reset
 The install is in-place; VM state (existing agents, auth tokens,
 workspace edits) is preserved across agent additions.
 
-## Layout
-
-```
-agentsb/
-├── Formula/agentsb.rb     # Homebrew formula
-├── bin/agentsb            # wrapper (Python, PEP 723 / uv-managed deps)
-├── lima/
-│   ├── base.yaml          # the VM template: packages, firewall, node, uv
-│   └── agents/            # per-agent provision fragments
-│       ├── claude.yaml    # npm i -g @anthropic-ai/claude-code
-│       ├── codex.yaml     # npm i -g @openai/codex
-│       ├── aider.yaml     # uvx shim for aider-chat
-│       └── forge.yaml     # curl-piped forgecode install
-├── tests/
-│   ├── conftest.py        # loads bin/agentsb as a module
-│   ├── test_cli.py        # unit tests (argparse, env forwarding, ...)
-│   └── run.py             # PEP 723 test runner (uv-managed pytest venv)
-└── README.md
-```
-
-Only `lima/base.yaml` is used as the Lima VM template. Agent fragments
-are standalone provision scripts that `bin/agentsb` parses with PyYAML
-and executes inside the existing VM via `limactl shell VM -- sudo bash -s`.
-This makes agent addition incremental (no VM rebuild) while still letting
-Lima own base VM lifecycle.
-
 ## Testing
 
 ```sh
@@ -234,8 +215,6 @@ and `pyyaml` in an ephemeral venv on first run and caches them for later.
 - **`limactl: VM creation failed`** — run `agentsb --reset` after checking
   `limactl list` for stale entries. `rm -rf ~/.lima/agentsb` is the
   nuclear option.
-- **Agent can't reach network** — check the egress firewall isn't blocking
-  a port you actually need. The template allows 53/80/443/22 by default.
 - **`--with-claude-config` doesn't pick up new files** — it copies a safe
   subset each run, not a full mirror. Add filenames to `sync_claude_config`
   in `bin/agentsb` if you want more.

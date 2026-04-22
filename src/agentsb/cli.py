@@ -18,6 +18,7 @@ from .claude_sync import ClaudeConfigSync
 from .errors import AgentsbError
 from .paths import Paths
 from .provision import ProvisionRunner
+from .prune import Pruner
 from .vm import LimaVM
 from .workspace import VMRegistry, WorkspaceResolver
 
@@ -70,6 +71,8 @@ def build_parser(agents: list[str]) -> argparse.ArgumentParser:
                    help="destroy and recreate the VM")
     g.add_argument("--status", action="store_const", dest="mode", const="status",
                    help="show VM status")
+    g.add_argument("--prune", action="store_const", dest="mode", const="prune",
+                   help="delete registered VMs whose source directory no longer exists")
     p.set_defaults(mode="run")
     return p
 
@@ -112,6 +115,12 @@ def main() -> int:
 
     registry = AgentRegistry(paths)
     ns, agent, agent_args = parse(sys.argv[1:], registry.list())
+
+    # --prune is a workspace-independent maintenance op; handle it before
+    # we require a valid workspace or do any resolver work.
+    if ns.mode == "prune":
+        Pruner(VMRegistry(), console).prune()
+        return 0
 
     workspace = Path(ns.workspace).expanduser().resolve()
     if not workspace.is_dir():
