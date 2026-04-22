@@ -7,16 +7,6 @@ provision:
       set -euxo pipefail
       npm install -g @anthropic-ai/claude-code
 
-# agentsb runs this before launching claude. If `check` exits non-zero,
-# it runs `login` interactively (user's TTY attached) and then re-checks.
-auth:
-  check: |
-    test -n "${ANTHROPIC_API_KEY:-}" \
-      || test -n "${ANTHROPIC_AUTH_TOKEN:-}" \
-      || test -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" \
-      || test -f "$HOME/.claude/.credentials.json"
-  login: claude /login
-
 # Flags injected when agentsb is invoked with --auto.
 auto:
   flags:
