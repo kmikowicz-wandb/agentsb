@@ -16,3 +16,8 @@ auth:
       || test -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" \
       || test -f "$HOME/.claude/.credentials.json"
   login: claude /login
+
+# Flags injected when agentsb is invoked with --auto.
+auto:
+  flags:
+    - --dangerously-skip-permissions

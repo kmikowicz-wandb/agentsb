@@ -6,3 +6,9 @@ provision:
       #!/usr/bin/env bash
       set -euxo pipefail
       npm install -g @openai/codex
+
+# Flags injected when agentsb is invoked with --auto.
+auto:
+  flags:
+    - --approval-mode
+    - full-auto

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
 from rich.console import Console
 
 from .paths import Paths
@@ -33,6 +34,16 @@ class AgentRegistry:
         if not self.has(name):
             raise KeyError(f"no fragment for agent: {name}")
         return self._paths.agent_fragment(name)
+
+    def auto_config(self, name: str) -> dict:
+        """Return the auto: block from an agent fragment, or {}.
+
+        auto:
+          flags: [...]   # prepended to agent argv
+          env:   [...]   # K=V pairs added to the launch environment
+        """
+        data = yaml.safe_load(self.fragment(name).read_text()) or {}
+        return data.get("auto") or {}
 
 
 class AgentManager:

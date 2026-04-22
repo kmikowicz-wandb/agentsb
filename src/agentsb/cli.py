@@ -60,6 +60,8 @@ def build_parser(agents: list[str]) -> argparse.ArgumentParser:
                    help="directory bind-mounted at /workspace (default: $PWD)")
     p.add_argument("--ephemeral", action="store_true",
                    help="throwaway VM, destroyed on exit")
+    p.add_argument("--auto", action="store_true",
+                   help="run agent in fully-automatic mode (skip all permission prompts)")
     p.add_argument("--with-claude-config", action="store_true",
                    help="copy safe subset of host ~/.claude/ into the VM")
     g = p.add_mutually_exclusive_group()
@@ -170,10 +172,16 @@ def main() -> int:
             auth.ensure_authed(agent, registry.fragment(agent))
             if ns.with_claude_config:
                 claude_sync.sync()
+            if ns.auto:
+                auto_cfg = registry.auto_config(agent)
+                auto_flags: list[str] = auto_cfg.get("flags", [])
+                auto_env: list[str] = auto_cfg.get("env", [])
+            else:
+                auto_flags, auto_env = [], []
             vm.launch(
-                [agent, *agent_args],
+                [agent, *auto_flags, *agent_args],
                 workdir=vm_workdir,
-                env=forwarded_env_pairs(),
+                env=forwarded_env_pairs() + auto_env,
             )
         elif ns.mode == "shell":
             vm.ensure_running()

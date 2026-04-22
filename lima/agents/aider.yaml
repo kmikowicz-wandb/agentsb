@@ -16,3 +16,8 @@ provision:
       set -euxo pipefail
       # Warm the uvx cache so first interactive run is instant.
       uvx --from aider-chat aider --version >/dev/null
+
+# Flags injected when agentsb is invoked with --auto.
+auto:
+  flags:
+    - --yes

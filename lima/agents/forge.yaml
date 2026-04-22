@@ -9,3 +9,8 @@ provision:
       # Ensure ~/.local/bin is on PATH for non-login shells too.
       grep -q '.local/bin' "$HOME/.bashrc" || \
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+
+# Flags injected when agentsb is invoked with --auto.
+auto:
+  flags:
+    - --auto
