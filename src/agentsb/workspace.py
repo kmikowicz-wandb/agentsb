@@ -8,9 +8,12 @@ global, with three behaviors beyond a simple hash:
      after resolving symlinks, so `~/proj`, `/Users/me/proj`, and any
      symlink pointing at the same directory map to the same VM.
   2. **Ancestor reuse** — if an ancestor directory already has a live
-     registered VM, the user is prompted whether to reuse it (default
-     yes). On reuse, the VM's existing mount covers the current dir;
-     the caller derives a `vm_workdir` to cd into the right subdir.
+     registered VM, the user is warned and prompted whether to reuse it
+     (default **no**). On reuse, the VM's existing mount covers the
+     current dir; the caller derives a `vm_workdir` to cd into the right
+     subdir. Non-interactive invocations default to a fresh VM, not
+     reuse, since the reuse decision has security implications (the
+     agent sees the ancestor's whole mount, not just this directory).
   3. **$HOME guard** — workspaces outside the user's home directory
      trigger a red warning panel and a confirmation prompt. Non-TTY
      invocations are refused outright.
@@ -233,22 +236,28 @@ class WorkspaceResolver:
     def _confirm_reuse_ancestor(
         self, workspace: Path, entry: VMRegistryEntry
     ) -> bool:
-        self._console.print(Panel(
-            f"A VM already covers an ancestor of this directory.\n\n"
+        self._console.print(Panel.fit(
+            f"[bold yellow]A VM already covers an ancestor of this "
+            f"directory.[/bold yellow]\n\n"
             f"Workspace:  [yellow]{workspace}[/yellow]\n"
             f"Ancestor:   [yellow]{entry.workspace_path}[/yellow]\n"
             f"VM:         [bold]{entry.vm_name}[/bold]\n\n"
-            f"Reusing keeps you on the same VM as the ancestor — same\n"
-            f"auth state, same caches, same other agents. The ancestor's\n"
-            f"mount already covers your current directory.\n\n"
-            f"Decline to get a fresh, isolated VM for this exact directory.",
-            title="[cyan]Reuse ancestor VM?[/cyan]",
-            border_style="cyan",
+            f"If you reuse it, the agent will see [bold]everything under "
+            f"the ancestor path[/bold] —\n"
+            f"not just this directory. It will also share auth state and\n"
+            f"caches with whatever else you've been running in that VM.\n\n"
+            f"Decline to get a [bold]fresh, isolated VM[/bold] scoped to "
+            f"this exact directory.",
+            title="[yellow on black]  ⚠  REUSE ANCESTOR VM?  ⚠  [/yellow on black]",
+            border_style="yellow",
         ))
         if not sys.stdin.isatty():
-            self._console.print("[dim]Non-interactive — defaulting to reuse.[/dim]")
-            return True
+            self._console.print(
+                "[dim]Non-interactive — defaulting to a fresh VM "
+                "(use --workspace on the ancestor path to reuse explicitly).[/dim]"
+            )
+            return False
         answer = self._console.input(
-            "[cyan]Reuse existing VM? [Y/n] [/cyan]"
+            "[yellow]Reuse ancestor VM? [y/N] [/yellow]"
         ).strip().lower()
-        return answer not in ("n", "no")
+        return answer in ("y", "yes")

@@ -55,12 +55,6 @@ What it does **not** give you:
 - Per-hostname egress filtering. Lima's firewall is port-level. For
   per-host enforcement, run a filtering HTTPS proxy (e.g. mitmproxy with an
   allowlist) on the host and set `HTTPS_PROXY` inside the VM.
-- Isolation between projects or between agents. All invocations share one
-  `agentsb` VM with every agent installed. A prompt injection during a
-  `claude` session can leave state that affects the next `codex` or `aider`
-  session in the same VM. Mitigations: `--ephemeral` for risky one-offs, or
-  `AGENTSB_VM=project-foo` for a named per-project VM, or `--reset` when
-  you suspect drift.
 - Protection from supply-chain attacks against the agent's own install
   (npm/curl-piped installers run at provision time).
 

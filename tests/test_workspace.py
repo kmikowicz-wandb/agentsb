@@ -184,13 +184,32 @@ def test_resolve_ancestor_reuse_accepted(monkeypatch, tmp_path):
     resolver, reg = _resolver(tmp_path, existing_vms=("agentsb-ancestor",))
     reg.register("agentsb-ancestor", parent)
 
-    # Interactive TTY, user accepts.
+    # Interactive TTY, user explicitly accepts (prompt defaults to No, so
+    # the user must type y/yes to reuse).
     _make_tty(monkeypatch, True)
-    monkeypatch.setattr(resolver._console, "input", _StubInputs([""]))  # <Enter> → default yes
+    monkeypatch.setattr(resolver._console, "input", _StubInputs(["y"]))
 
     vm_name, mount = resolver.resolve(child)
     assert vm_name == "agentsb-ancestor"
     assert mount == parent.resolve()
+
+
+def test_resolve_ancestor_reuse_default_declines(monkeypatch, tmp_path):
+    """Blank <Enter> on the reuse prompt defaults to No — fresh VM is created."""
+    _patch_home(monkeypatch, tmp_path)
+    parent = tmp_path / "proj"
+    child = parent / "sub"
+    child.mkdir(parents=True)
+
+    resolver, reg = _resolver(tmp_path, existing_vms=("agentsb-ancestor",))
+    reg.register("agentsb-ancestor", parent)
+
+    _make_tty(monkeypatch, True)
+    monkeypatch.setattr(resolver._console, "input", _StubInputs([""]))
+
+    vm_name, mount = resolver.resolve(child)
+    assert vm_name != "agentsb-ancestor"
+    assert mount == child.resolve()
 
 
 def test_resolve_ancestor_reuse_declined_creates_new(monkeypatch, tmp_path):
@@ -210,7 +229,10 @@ def test_resolve_ancestor_reuse_declined_creates_new(monkeypatch, tmp_path):
     assert mount == child.resolve()
 
 
-def test_resolve_ancestor_reuse_non_tty_defaults_yes(monkeypatch, tmp_path):
+def test_resolve_ancestor_reuse_non_tty_defaults_fresh(monkeypatch, tmp_path):
+    """Non-interactive runs don't reuse an ancestor VM — a fresh, scoped VM
+    is created instead. Reuse has security implications (the agent sees the
+    ancestor's whole mount) so it must be an explicit interactive choice."""
     _patch_home(monkeypatch, tmp_path)
     parent = tmp_path / "proj"
     child = parent / "sub"
@@ -221,8 +243,8 @@ def test_resolve_ancestor_reuse_non_tty_defaults_yes(monkeypatch, tmp_path):
 
     _make_tty(monkeypatch, False)
     vm_name, mount = resolver.resolve(child)
-    assert vm_name == "agentsb-ancestor"
-    assert mount == parent.resolve()
+    assert vm_name != "agentsb-ancestor"
+    assert mount == child.resolve()
 
 
 def test_resolve_outside_home_refuses_non_tty(monkeypatch, tmp_path):
