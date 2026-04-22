@@ -1,0 +1,42 @@
+#compdef agentsb
+# zsh completion for agentsb
+
+_agentsb() {
+  local -a agents
+  agents=(aider claude codex forge)
+
+  # `agentsb resize <TAB>` — complete with live Lima VM names.
+  if (( CURRENT >= 3 )) && [[ $words[2] == "resize" ]]; then
+    local -a vms
+    vms=(${(f)"$(limactl list --format '{{.Name}}' 2>/dev/null)"})
+    _describe -t vms 'lima VM' vms
+    return
+  fi
+
+  _arguments -s -S \
+    '(-h --help)'{-h,--help}'[show help]' \
+    '(-w --workspace)'{-w,--workspace}'[directory to mount at /workspace]:dir:_files -/' \
+    '--ephemeral[throwaway VM, destroyed on exit]' \
+    '--auto[run agent in fully-automatic mode (skip permission prompts)]' \
+    '--with-claude-config[copy safe subset of host ~/.claude/ into the VM]' \
+    '(--shell --stop --reset --status --prune --disk-check)--shell[open interactive VM shell]' \
+    '(--shell --stop --reset --status --prune --disk-check)--stop[stop the VM]' \
+    '(--shell --stop --reset --status --prune --disk-check)--reset[destroy and recreate the VM]' \
+    '(--shell --stop --reset --status --prune --disk-check)--status[show VM status]' \
+    '(--shell --stop --reset --status --prune --disk-check)--prune[delete stale VM registrations]' \
+    '(--shell --stop --reset --status --prune --disk-check)--disk-check[mark over-80%-used VMs for resize]' \
+    '--install-completion[install shell completion]::shell:(bash zsh fish)' \
+    '1: :->first' \
+    '*:: :->rest'
+
+  case $state in
+    first)
+      local -a cmds
+      cmds=('resize:grow a VM disk by 1.5x immediately')
+      _describe -t commands 'subcommand' cmds
+      _describe -t agents 'agent' agents
+      ;;
+  esac
+}
+
+_agentsb "$@"

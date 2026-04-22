@@ -82,13 +82,23 @@ class LimaVM:
 
     def has_binary(self, name: str) -> bool:
         r = subprocess.run(
-            ["limactl", "shell", self.name, "--",
+            [*self._shell_prefix(), "--",
              "sh", "-c", f"command -v {shlex.quote(name)} >/dev/null"],
             capture_output=True,
         )
         return r.returncode == 0
 
     # ---- execution -----------------------------------------------------
+
+    def _shell_prefix(self, workdir: str = "/") -> list[str]:
+        """`limactl shell` invocation prefix with an explicit workdir.
+
+        Without --workdir, limactl tries to cd into the host's $PWD inside
+        the guest, which fails noisily when the host path isn't mounted
+        (the host's /Users/... tree doesn't exist in the Ubuntu guest).
+        Passing --workdir suppresses that auto-cd.
+        """
+        return ["limactl", "shell", "--workdir", workdir, self.name]
 
     def exec_script(self, script: str, *, as_root: bool, silent: bool = False) -> int:
         """Pipe a shell script into bash inside the VM. Returns exit code.
@@ -98,7 +108,7 @@ class LimaVM:
         output is captured and discarded — use for fast, noisy predicate
         checks (e.g. auth_check).
         """
-        cmd = ["limactl", "shell", self.name, "--"]
+        cmd = [*self._shell_prefix(), "--"]
         cmd += ["sudo", "bash", "-s"] if as_root else ["bash", "-s"]
         r = subprocess.run(
             cmd, input=script, text=True,
@@ -106,7 +116,7 @@ class LimaVM:
         )
         return r.returncode
 
-    def run_interactive(self, command: str) -> int:
+    def run_interactive(self, command: str, *, workdir: str = "/workspace") -> int:
         """Run a shell command inside the VM with the user's TTY attached.
 
         Unlike exec_script (which pipes the script through stdin), this uses
@@ -114,12 +124,12 @@ class LimaVM:
         Required for interactive flows that prompt the user — OAuth code
         paste, password entry, browser-completed login, etc.
         """
-        cmd = ["limactl", "shell", self.name, "--", "bash", "-c", command]
+        cmd = [*self._shell_prefix(workdir), "--", "bash", "-c", command]
         return subprocess.run(cmd).returncode
 
     def mkdir(self, path: str) -> None:
         subprocess.run(
-            ["limactl", "shell", self.name, "--", "mkdir", "-p", path],
+            [*self._shell_prefix(), "--", "mkdir", "-p", path],
             check=True, capture_output=True,
         )
 

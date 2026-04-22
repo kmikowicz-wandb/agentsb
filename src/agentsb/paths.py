@@ -28,6 +28,7 @@ class Paths:
         self.lima_dir: Path = self.home / "lima"
         self.agents_dir: Path = self.lima_dir / "agents"
         self.base_template: Path = self.lima_dir / "base.yaml"
+        self.completions_dir: Path = self.home / "completions"
 
     def agent_fragment(self, name: str) -> Path:
         return self.agents_dir / f"{name}.yaml"

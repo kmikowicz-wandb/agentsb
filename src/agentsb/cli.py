@@ -15,6 +15,7 @@ from rich.console import Console
 from .agents import AgentManager, AgentRegistry
 from .auth import AuthCoordinator
 from .claude_sync import ClaudeConfigSync
+from .completion import install as install_completion
 from .disk import check_and_mark_all, drain_pending, resize_cli
 from .errors import AgentsbError
 from .host_firewall import ensure_firewall
@@ -69,6 +70,10 @@ def build_parser(agents: list[str]) -> argparse.ArgumentParser:
                    help="run agent in fully-automatic mode (skip all permission prompts)")
     p.add_argument("--with-claude-config", action="store_true",
                    help="copy safe subset of host ~/.claude/ into the VM")
+    p.add_argument("--install-completion", dest="install_completion",
+                   nargs="?", const="auto", default=None, metavar="SHELL",
+                   help="install shell completion for bash/zsh/fish "
+                        "(auto-detects from $SHELL when SHELL omitted)")
     g = p.add_mutually_exclusive_group()
     g.add_argument("--shell", action="store_const", dest="mode", const="shell",
                    help="open interactive VM shell at /workspace")
@@ -134,6 +139,8 @@ def main() -> int:
 
     # Workspace-independent maintenance ops: handle before we require a
     # valid workspace or do any resolver work.
+    if ns.install_completion is not None:
+        return install_completion(ns.install_completion, console)
     if ns.mode == "prune":
         Pruner(VMRegistry(), console).prune()
         return 0

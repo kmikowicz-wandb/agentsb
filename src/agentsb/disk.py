@@ -89,7 +89,7 @@ def usage_percent(vm: LimaVM) -> int | None:
     if vm.status() != "Running":
         return None
     r = subprocess.run(
-        ["limactl", "shell", vm.name, "--", "df", "-P", "/"],
+        ["limactl", "shell", "--workdir", "/", vm.name, "--", "df", "-P", "/"],
         capture_output=True, text=True,
     )
     if r.returncode != 0:

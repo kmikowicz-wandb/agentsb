@@ -11,6 +11,7 @@ class Agentsb < Formula
     libexec.install "bin/agentsb"
     libexec.install "lima"
     libexec.install "src"
+    libexec.install "completions"
 
     (bin/"agentsb").write <<~SH
       #!/bin/bash
@@ -18,6 +19,10 @@ class Agentsb < Formula
       exec #{libexec}/agentsb "$@"
     SH
     (bin/"agentsb").chmod 0755
+
+    bash_completion.install libexec/"completions/agentsb.bash" => "agentsb"
+    zsh_completion.install libexec/"completions/_agentsb"
+    fish_completion.install libexec/"completions/agentsb.fish"
   end
 
   service do
@@ -44,6 +49,11 @@ class Agentsb < Formula
         brew services start agentsb
 
       Runs at 03:00 local time; logs to #{HOMEBREW_PREFIX}/var/log/agentsb-disk-check.log.
+
+      Shell completion is installed into Homebrew's shared completion dirs.
+      Non-Homebrew users can instead run:
+
+        agentsb --install-completion
     EOS
   end
 
