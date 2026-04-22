@@ -6,296 +6,43 @@
 #     "pyyaml>=6.0",
 # ]
 # ///
-"""agentsb — run coding agents in isolated Lima VMs.
+"""agentsb entry point.
 
-One shared `agentsb` Lima VM. The VM itself only has the base tools (node,
-uv, firewall). Each agent is installed on first invocation and cached for
-subsequent runs. Adding a new agent is: drop a provision fragment in
-lima/agents/<name>.yaml; next `agentsb <name>` will install it.
+This file is a thin shim: it adds the project's `src/` directory to
+`sys.path` and delegates to `agentsb.cli.main`. All business logic lives
+in `src/agentsb/*.py` — see that package for the real code.
 """
 from __future__ import annotations
 
-import argparse
-import atexit
-import os
-import shlex
-import shutil
-import subprocess
 import sys
-import time
 from pathlib import Path
-from typing import NoReturn
-
-import yaml
-from rich.console import Console
-from rich.panel import Panel
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-AGENTSB_HOME = Path(os.environ.get("AGENTSB_HOME") or SCRIPT_DIR.parent).resolve()
-LIMA_DIR = AGENTSB_HOME / "lima"
-AGENTS_DIR = LIMA_DIR / "agents"
-BASE_TEMPLATE = LIMA_DIR / "base.yaml"
-
-FORWARDED_ENV = (
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    "OPENAI_API_KEY",
-    "NO_COLOR",
-    "TERM",
-)
-
-console = Console(stderr=True, highlight=False)
 
 
-def die(msg: str, code: int = 1) -> NoReturn:
-    console.print(f"[red]agentsb:[/red] {msg}")
-    sys.exit(code)
+def _add_src_to_path() -> None:
+    """Find the src/ directory and make `agentsb` importable.
 
+    Supports two layouts:
+      - dev checkout:       <repo>/bin/agentsb and <repo>/src/agentsb/
+      - Homebrew install:   libexec/agentsb and libexec/src/agentsb/
 
-def list_agents() -> list[str]:
-    if not AGENTS_DIR.exists():
-        return []
-    return sorted(p.stem for p in AGENTS_DIR.glob("*.yaml"))
-
-
-def lima_status(vm: str) -> str:
-    """Return 'Running' / 'Stopped' / 'Broken' / '' (missing)."""
-    r = subprocess.run(
-        ["limactl", "list", "--format", "{{.Status}}", vm],
-        capture_output=True, text=True,
-    )
-    if r.returncode != 0 or not r.stdout.strip():
-        return ""
-    return r.stdout.strip().splitlines()[0]
-
-
-def ensure_vm(vm: str, workspace: Path) -> None:
-    s = lima_status(vm)
-    if s == "Running":
-        return
-    if s == "Stopped":
-        console.rule(f"[cyan]Starting VM {vm}[/cyan]")
-        subprocess.run(["limactl", "start", vm], check=True)
-        return
-    if s in ("", "Broken"):
-        console.print(Panel.fit(
-            f"Creating VM  [bold]{vm}[/bold]\n"
-            f"Workspace    [bold]{workspace}[/bold]\n"
-            f"First boot ~2–4 min. Agents install on first use.",
-            title="[cyan]agentsb[/cyan]", border_style="cyan",
-        ))
-        console.rule(f"[cyan]limactl start (streaming)[/cyan]")
-        subprocess.run(
-            [
-                "limactl", "start", "--tty=false",
-                "--name", vm,
-                "--set", f'.param.WORKSPACE = "{workspace}"',
-                str(BASE_TEMPLATE),
-            ],
-            check=True,
-        )
-        return
-    die(f"VM in unexpected state: {s}")
-
-
-def agent_installed(vm: str, agent: str) -> bool:
-    r = subprocess.run(
-        ["limactl", "shell", vm, "--",
-         "sh", "-c", f"command -v {shlex.quote(agent)} >/dev/null"],
-        capture_output=True,
-    )
-    return r.returncode == 0
-
-
-def run_provision_fragment(vm: str, agent: str) -> None:
-    fragment = AGENTS_DIR / f"{agent}.yaml"
-    data = yaml.safe_load(fragment.read_text()) or {}
-    blocks = data.get("provision") or []
-    total = len(blocks)
-    for idx, block in enumerate(blocks, start=1):
-        mode = block.get("mode", "system")
-        script = (block.get("script") or "").strip()
-        if not script:
-            continue
-        cmd = ["limactl", "shell", vm, "--"]
-        cmd += ["sudo", "bash", "-s"] if mode == "system" else ["bash", "-s"]
-        console.rule(f"[cyan]Provisioning {agent} — step {idx}/{total} ({mode})[/cyan]")
-        # Stream stdout/stderr directly so the user sees apt/npm/curl progress
-        # instead of a silent spinner during multi-minute installs.
-        r = subprocess.run(cmd, input=script, text=True)
-        if r.returncode != 0:
-            die(f"agent '{agent}' provision failed (mode={mode}, block={idx}/{total})")
-
-
-def ensure_agent(vm: str, agent: str) -> None:
-    if agent_installed(vm, agent):
-        return
-    console.print(f"[cyan]Installing [bold]{agent}[/bold] into VM (first use)…[/cyan]")
-    run_provision_fragment(vm, agent)
-    console.print(f"[green]✓[/green] {agent} installed")
-
-
-def sync_claude_config(vm: str) -> None:
-    src_root = Path.home() / ".claude"
-    if not src_root.is_dir():
-        return
-    items = ("CLAUDE.md", "commands", "agents", "plugins", "settings.json")
-    present = [src_root / i for i in items if (src_root / i).exists()]
-    if not present:
-        return
-    subprocess.run(
-        ["limactl", "shell", vm, "--", "mkdir", "-p", ".claude"],
-        check=True, capture_output=True,
-    )
-    console.print("[cyan]Syncing ~/.claude subset into VM…[/cyan]")
-    for src in present:
-        subprocess.run(
-            ["limactl", "copy", "-r", str(src), f"{vm}:.claude/"],
-            check=True, capture_output=True,
-        )
-    console.print("[green]✓[/green] ~/.claude subset synced")
-
-
-def forwarded_env_pairs() -> list[str]:
-    return [f"{k}={os.environ[k]}" for k in FORWARDED_ENV if os.environ.get(k)]
-
-
-# ---- argument splitting -------------------------------------------------
-
-def split_argv(argv: list[str], agents: list[str]) -> tuple[list[str], str | None, list[str]]:
-    """Separate wrapper args from (agent, agent_args).
-
-    Strategy: run argparse's parse_known_args on everything, then the first
-    entry of `rest` that matches a known agent is the agent; anything after
-    is the agent's args. Anything in `rest` before the agent is an unknown
-    wrapper flag (error).
+    In both cases the parent of this script has a sibling or nested
+    `src/agentsb` directory.
     """
-    # We'll return the full argv for argparse to parse, then post-process.
-    return argv, None, []
-
-
-def build_parser(agents: list[str]) -> argparse.ArgumentParser:
-    agents_line = ", ".join(agents) if agents else "(none configured)"
-    p = argparse.ArgumentParser(
-        prog="agentsb",
-        description=(
-            "Run coding agents in an isolated Lima VM. One shared VM with lazy "
-            "agent install; each agent's install runs on its first invocation."
-        ),
-        epilog=f"Agents available: {agents_line}",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+    here = Path(__file__).resolve().parent
+    candidates = (
+        here / "src",            # installed: libexec/agentsb + libexec/src/agentsb
+        here.parent / "src",     # dev:       repo/bin/agentsb + repo/src/agentsb
     )
-    p.add_argument("-w", "--workspace", default=os.getcwd(),
-                   help="directory bind-mounted at /workspace (default: $PWD)")
-    p.add_argument("--ephemeral", action="store_true",
-                   help="throwaway VM, destroyed on exit")
-    p.add_argument("--with-claude-config", action="store_true",
-                   help="copy safe subset of host ~/.claude/ into the VM")
-    g = p.add_mutually_exclusive_group()
-    g.add_argument("--shell", action="store_const", dest="mode", const="shell",
-                   help="open interactive VM shell at /workspace")
-    g.add_argument("--stop", action="store_const", dest="mode", const="stop",
-                   help="stop the VM")
-    g.add_argument("--reset", action="store_const", dest="mode", const="reset",
-                   help="destroy and recreate the VM")
-    g.add_argument("--status", action="store_const", dest="mode", const="status",
-                   help="show VM status")
-    p.set_defaults(mode="run")
-    return p
+    for src in candidates:
+        if (src / "agentsb" / "__init__.py").is_file():
+            sys.path.insert(0, str(src))
+            return
+    raise SystemExit(f"agentsb: could not locate src/agentsb next to {here}")
 
 
-def parse(argv: list[str], agents: list[str]) -> tuple[argparse.Namespace, str | None, list[str]]:
-    parser = build_parser(agents)
-    ns, rest = parser.parse_known_args(argv)
+_add_src_to_path()
 
-    agent: str | None = None
-    agent_idx: int | None = None
-    for i, tok in enumerate(rest):
-        if tok in agents:
-            agent = tok
-            agent_idx = i
-            break
-
-    if agent_idx is None:
-        stray = [t for t in rest if t != "--"]
-        if stray:
-            die(f"unknown flag or agent: {stray[0]!r} (agents: {', '.join(agents)})")
-        return ns, None, []
-
-    before = [t for t in rest[:agent_idx] if t != "--"]
-    if before:
-        die(f"unknown flag: {before[0]!r}")
-
-    agent_args = rest[agent_idx + 1:]
-    if agent_args and agent_args[0] == "--":
-        agent_args = agent_args[1:]
-    return ns, agent, agent_args
-
-
-# ---- modes --------------------------------------------------------------
-
-def mode_run(ns, vm: str, agent: str, agent_args: list[str], workspace: Path) -> NoReturn:
-    ensure_vm(vm, workspace)
-    ensure_agent(vm, agent)
-    if ns.with_claude_config:
-        sync_claude_config(vm)
-    cmd = ["limactl", "shell", "--workdir", "/workspace", vm]
-    env_pairs = forwarded_env_pairs()
-    if env_pairs:
-        cmd += ["env", *env_pairs]
-    cmd += [agent, *agent_args]
-    os.execvp(cmd[0], cmd)
-
-
-def mode_shell(ns, vm: str, workspace: Path) -> NoReturn:
-    ensure_vm(vm, workspace)
-    if ns.with_claude_config:
-        sync_claude_config(vm)
-    os.execvp("limactl", ["limactl", "shell", "--workdir", "/workspace", vm])
-
-
-def mode_reset(vm: str, workspace: Path) -> None:
-    subprocess.run(["limactl", "delete", "-f", vm], capture_output=True)
-    ensure_vm(vm, workspace)
-
-
-def main() -> int:
-    agents = list_agents()
-    ns, agent, agent_args = parse(sys.argv[1:], agents)
-
-    if not BASE_TEMPLATE.exists():
-        die(f"template missing: {BASE_TEMPLATE}")
-    if not shutil.which("limactl"):
-        die("limactl not found — install with: brew install lima")
-
-    workspace = Path(ns.workspace).expanduser().resolve()
-    if not workspace.is_dir():
-        die(f"workspace not accessible: {workspace}")
-
-    if ns.ephemeral:
-        vm = f"agentsb-eph-{int(time.time())}-{os.getpid()}"
-        atexit.register(
-            lambda: subprocess.run(["limactl", "delete", "-f", vm], capture_output=True)
-        )
-    else:
-        vm = os.environ.get("AGENTSB_VM", "agentsb")
-
-    mode = ns.mode
-    if mode == "run":
-        if agent is None:
-            die("AGENT required. Run `agentsb --help` for usage.", code=2)
-        mode_run(ns, vm, agent, agent_args, workspace)
-    elif mode == "shell":
-        mode_shell(ns, vm, workspace)
-    elif mode == "stop":
-        subprocess.run(["limactl", "stop", vm])
-    elif mode == "reset":
-        mode_reset(vm, workspace)
-    elif mode == "status":
-        print(lima_status(vm) or "(no VM)")
-
-    return 0
+from agentsb.cli import main  # noqa: E402  (must come after sys.path edit)
 
 
 if __name__ == "__main__":

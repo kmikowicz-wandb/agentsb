@@ -10,6 +10,7 @@ class Agentsb < Formula
   def install
     libexec.install "bin/agentsb"
     libexec.install "lima"
+    libexec.install "src"
 
     (bin/"agentsb").write <<~SH
       #!/bin/bash
