@@ -1,12 +1,12 @@
 """Host-side pf egress rules for Lima VMs (macOS only).
 
-Rules are enforced on bridge100 (socket_vmnet's bridge) before NAT, so
-code running inside the VM cannot modify or bypass them regardless of
-what privileges it holds inside the guest.
+Rules match packets sourced from Apple's vmnet shared subnet
+(192.168.64.0/24, used by Lima's vzNAT driver) before NAT, so code
+running inside the VM cannot modify or bypass them regardless of what
+privileges it holds inside the guest.
 """
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -34,23 +34,6 @@ def install(console: Console) -> None:
     if not src.exists():
         console.print(f"[red]pf rules template not found: {src}[/red]")
         sys.exit(1)
-
-    if not shutil.which("socket_vmnet"):
-        console.print(
-            "[red]socket_vmnet not found.[/red]\n\n"
-            "Install and start it, then re-run this command:\n\n"
-            "  brew install socket_vmnet\n"
-            "  sudo brew services start socket_vmnet\n"
-        )
-        sys.exit(1)
-
-    # Lima needs sudoers entries to start/stop socket_vmnet.
-    console.print("[cyan]Installing Lima sudoers for socket_vmnet...[/cyan]")
-    r = subprocess.run(["limactl", "sudoers"], capture_output=True, text=True, check=True)
-    subprocess.run(
-        ["sudo", "tee", "/etc/sudoers.d/lima"],
-        input=r.stdout, text=True, check=True, capture_output=True,
-    )
 
     # Install the pf anchor rules file.
     console.print("[cyan]Installing pf anchor rules...[/cyan]")

@@ -4,8 +4,9 @@
 # Security invariants that live here (don't override in children):
 #   - Host $HOME is NOT mounted. Only WORKSPACE is visible inside the VM.
 #   - ssh.loadDotSSHPubKeys: false — host SSH pubkeys don't leak into the VM.
-#   - Egress firewall: pf rules on the macOS host (bridge100), not inside the VM.
-#     Run `agentsb --setup-host` once to install them. See lima/pf-anchor.conf.
+#   - Egress firewall: pf rules on the macOS host filtering 192.168.64.0/24
+#     (vzNAT), not inside the VM. Run `agentsb --setup-host` once to install
+#     them. See lima/pf-anchor.conf.
 #   - Native ARM only (rosetta: false) for speed and to surface arch bugs early.
 
 images:
@@ -37,10 +38,11 @@ mountType: "virtiofs"
 
 portForwards: []
 
-# socket_vmnet exposes bridge100 to the macOS pf firewall, so egress rules
-# can be enforced on the host rather than inside the VM.
+# vzNAT puts the VM on Apple's 192.168.64.0/24 vmnet shared subnet, which
+# macOS pf can filter before NAT — so egress rules are enforced on the host
+# rather than inside the VM, and no socket_vmnet/sudoers setup is required.
 networks:
-  - lima: shared
+  - vzNAT: true
 
 ssh:
   loadDotSSHPubKeys: false
