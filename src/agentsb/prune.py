@@ -10,12 +10,30 @@ from rich.console import Console
 from .workspace import VMRegistry, VMRegistryEntry
 
 
+def _limactl_stop(vm_name: str) -> int:
+    r = subprocess.run(
+        ["limactl", "stop", vm_name],
+        capture_output=True,
+    )
+    return r.returncode
+
+
 def _limactl_delete(vm_name: str) -> int:
     r = subprocess.run(
         ["limactl", "delete", "-f", vm_name],
         capture_output=True,
     )
     return r.returncode
+
+
+def _limactl_is_running(vm_name: str) -> bool:
+    r = subprocess.run(
+        ["limactl", "list", "--format", "{{.Status}}", vm_name],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0 or not r.stdout.strip():
+        return False
+    return r.stdout.strip().splitlines()[0] == "Running"
 
 
 def orphan_reason(entry: VMRegistryEntry) -> str | None:
@@ -50,10 +68,12 @@ class Pruner:
         registry: VMRegistry,
         console: Console,
         *,
+        stop_fn: Callable[[str], int] = _limactl_stop,
         destroy_fn: Callable[[str], int] = _limactl_delete,
     ) -> None:
         self._registry = registry
         self._console = console
+        self._stop = stop_fn
         self._destroy = destroy_fn
 
     def prune(self) -> list[VMRegistryEntry]:
@@ -68,6 +88,9 @@ class Pruner:
                 f"[yellow]→ pruning[/yellow] [bold]{e.vm_name}[/bold]  "
                 f"[dim]{e.workspace_path}[/dim]  [red]({reason})[/red]"
             )
+            if _limactl_is_running(e.vm_name):
+                self._console.print(f"  [cyan]stopping {e.vm_name}...[/cyan]")
+                self._stop(e.vm_name)
             rc = self._destroy(e.vm_name)
             if rc != 0:
                 self._console.print(
