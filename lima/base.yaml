@@ -4,7 +4,8 @@
 # Security invariants that live here (don't override in children):
 #   - Host $HOME is NOT mounted. Only WORKSPACE is visible inside the VM.
 #   - ssh.loadDotSSHPubKeys: false — host SSH pubkeys don't leak into the VM.
-#   - Egress firewall: iptables OUTPUT policy DROP, only DNS/HTTP/HTTPS/SSH out.
+#   - Egress firewall: pf rules on the macOS host (bridge100), not inside the VM.
+#     Run `agentsb --setup-host` once to install them. See lima/pf-anchor.conf.
 #   - Native ARM only (rosetta: false) for speed and to surface arch bugs early.
 
 images:
@@ -36,6 +37,11 @@ mountType: "virtiofs"
 
 portForwards: []
 
+# socket_vmnet exposes bridge100 to the macOS pf firewall, so egress rules
+# can be enforced on the host rather than inside the VM.
+networks:
+  - lima: shared
+
 ssh:
   loadDotSSHPubKeys: false
 
@@ -44,7 +50,7 @@ containerd:
   system: false
 
 provision:
-  # --- Base packages, Node.js, uv, egress firewall ----------------------
+  # --- Base packages, Node.js, uv ----------------------------------------
   - mode: system
     script: |
       #!/usr/bin/env bash
@@ -55,8 +61,7 @@ provision:
       apt-get install -y --no-install-recommends \
         ca-certificates curl git build-essential \
         python3 python3-pip python3-venv \
-        jq ripgrep less \
-        iptables iptables-persistent
+        jq ripgrep less
 
       # Node.js 22 LTS from NodeSource — claude-code and codex both need it.
       curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
@@ -67,28 +72,6 @@ provision:
 
       apt-get clean
       rm -rf /var/lib/apt/lists/*
-
-      # --- Egress firewall ------------------------------------------------
-      # Port-level allowlist only. For per-hostname enforcement, run a
-      # filtering HTTPS proxy on the host and set HTTPS_PROXY in the VM.
-      # OUTBOUND (egress) is the meaningful direction for this sandbox.
-      iptables -F OUTPUT
-      iptables -P OUTPUT DROP
-      iptables -A OUTPUT -o lo -j ACCEPT
-      iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-      iptables -A OUTPUT -p udp --dport 53  -j ACCEPT   # DNS
-      iptables -A OUTPUT -p tcp --dport 53  -j ACCEPT
-      iptables -A OUTPUT -p tcp --dport 80  -j ACCEPT   # HTTP
-      iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT   # HTTPS
-      iptables -A OUTPUT -p tcp --dport 22  -j ACCEPT   # git+ssh
-
-      # INBOUND is left wide open on purpose: the VM lives behind Lima's NAT
-      # and is only reachable by the host. Locking INPUT down breaks
-      # `limactl shell` (which is SSH from the host — a *new* inbound
-      # connection; ESTABLISHED/RELATED does not match it) and the VM
-      # becomes unreachable once the policy takes effect.
-
-      netfilter-persistent save
 
   - mode: user
     script: |

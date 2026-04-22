@@ -16,6 +16,7 @@ from .agents import AgentManager, AgentRegistry
 from .auth import AuthCoordinator
 from .claude_sync import ClaudeConfigSync
 from .errors import AgentsbError
+from .host_firewall import ensure_firewall
 from .paths import Paths
 from .provision import ProvisionRunner
 from .prune import Pruner
@@ -30,6 +31,9 @@ FORWARDED_ENV = (
     "OPENAI_API_KEY",
     "NO_COLOR",
     "TERM",
+    "TERM_PROGRAM",         # lets agents detect terminal capabilities (e.g. Shift+Enter)
+    "TERM_PROGRAM_VERSION",
+    "COLORTERM",
 )
 
 
@@ -168,6 +172,7 @@ def main() -> int:
             if agent is None:
                 die("AGENT required. Run `agentsb --help` for usage.", code=2)
             vm.ensure_running()
+            ensure_firewall(console)
             manager.ensure_installed(agent)
             auth.ensure_authed(agent, registry.fragment(agent))
             if ns.with_claude_config:
@@ -185,6 +190,7 @@ def main() -> int:
             )
         elif ns.mode == "shell":
             vm.ensure_running()
+            ensure_firewall(console)
             if ns.with_claude_config:
                 claude_sync.sync()
             vm.launch(workdir=vm_workdir)
