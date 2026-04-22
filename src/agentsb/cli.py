@@ -15,6 +15,7 @@ from rich.console import Console
 from .agents import AgentManager, AgentRegistry
 from .auth import AuthCoordinator
 from .claude_sync import ClaudeConfigSync
+from .disk import check_and_mark_all, drain_pending, resize_cli
 from .errors import AgentsbError
 from .host_firewall import ensure_firewall
 from .paths import Paths
@@ -79,6 +80,8 @@ def build_parser(agents: list[str]) -> argparse.ArgumentParser:
                    help="show VM status")
     g.add_argument("--prune", action="store_const", dest="mode", const="prune",
                    help="delete registered VMs whose source directory no longer exists")
+    g.add_argument("--disk-check", action="store_const", dest="mode", const="disk-check",
+                   help="mark registered VMs over 80%% disk usage for resize on next start")
     p.set_defaults(mode="run")
     return p
 
@@ -115,6 +118,13 @@ def main() -> int:
     if not shutil.which("limactl"):
         die("limactl not found — install with: brew install lima")
 
+    # `agentsb resize <vm>` — positional subcommand dispatched before the
+    # main flag parser, which doesn't know about it.
+    if len(sys.argv) >= 2 and sys.argv[1] == "resize":
+        if len(sys.argv) != 3:
+            die("usage: agentsb resize <vm-name>")
+        return resize_cli(sys.argv[2], console)
+
     paths = Paths()
     if not paths.base_template.exists():
         die(f"base template missing: {paths.base_template}")
@@ -122,10 +132,13 @@ def main() -> int:
     registry = AgentRegistry(paths)
     ns, agent, agent_args = parse(sys.argv[1:], registry.list())
 
-    # --prune is a workspace-independent maintenance op; handle it before
-    # we require a valid workspace or do any resolver work.
+    # Workspace-independent maintenance ops: handle before we require a
+    # valid workspace or do any resolver work.
     if ns.mode == "prune":
         Pruner(VMRegistry(), console).prune()
+        return 0
+    if ns.mode == "disk-check":
+        check_and_mark_all(VMRegistry(), console)
         return 0
 
     workspace = Path(ns.workspace).expanduser().resolve()
@@ -171,6 +184,7 @@ def main() -> int:
         if ns.mode == "run":
             if agent is None:
                 die("AGENT required. Run `agentsb --help` for usage.", code=2)
+            drain_pending(vm, console)
             vm.ensure_running()
             ensure_firewall(console)
             manager.ensure_installed(agent)
@@ -189,6 +203,7 @@ def main() -> int:
                 env=forwarded_env_pairs() + auto_env,
             )
         elif ns.mode == "shell":
+            drain_pending(vm, console)
             vm.ensure_running()
             ensure_firewall(console)
             if ns.with_claude_config:

@@ -20,6 +20,14 @@ class Agentsb < Formula
     (bin/"agentsb").chmod 0755
   end
 
+  service do
+    run [opt_bin/"agentsb", "--disk-check"]
+    run_type :cron
+    cron "0 3 * * *"
+    log_path var/"log/agentsb-disk-check.log"
+    error_log_path var/"log/agentsb-disk-check.log"
+  end
+
   def caveats
     <<~EOS
       First run of each agent creates a Lima VM (2-5 min). Subsequent starts
@@ -29,6 +37,13 @@ class Agentsb < Formula
         agentsb aider FILE...     # aider with files in /workspace
         agentsb --shell codex     # VM shell
         agentsb --stop claude     # stop VM when done
+        agentsb resize <vm>       # manually grow a VM's disk by 1.5x
+
+      Daily disk-usage check (marks VMs >80% full for resize on next start):
+
+        brew services start agentsb
+
+      Runs at 03:00 local time; logs to #{HOMEBREW_PREFIX}/var/log/agentsb-disk-check.log.
     EOS
   end
 
