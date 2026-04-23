@@ -69,7 +69,7 @@ class LimaVM:
                 ["limactl", "start", "--tty=false",
                  "--name", self.name,
                  "--set", f'.param.WORKSPACE = "{self._workspace}"',
-                 "--set", f'.param.MOUNT_TYPE = "{self._mount_type}"',
+                 "--set", f'.mountType = "{self._mount_type}"',
                  str(self._template)],
                 check=True,
             )
