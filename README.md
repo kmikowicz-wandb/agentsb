@@ -136,7 +136,7 @@ is created lazily on first `agentsb <AGENT>` invocation; no explicit
 | `AGENTSB_VM`          | Override VM name (default `agentsb`). Use for per-project or per-task VMs. |
 | `AGENTSB_HOME`        | Installation root (auto-detected by the brew shim).     |
 | `AGENTSB_TEMPLATE`    | Override template path (for local template dev).        |
-| `AGENTSB_MOUNT_TYPE`  | Filesystem mount type for the workspace: `virtiofs` (default, fast) or `9p` (lower host fd usage). Set at VM create time only. |
+| `AGENTSB_MOUNT_TYPE`  | Filesystem mount type for the workspace: `virtiofs` (default, fast) or `reverse-sshfs` (lower host fd usage). Set at VM create time only. |
 
 Forwarded into the VM when set on the host:
 `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
@@ -218,11 +218,11 @@ and `pyyaml` in an ephemeral venv on first run and caches them for later.
 - **Too many open files / `EMFILE` errors with large workspaces** — `virtiofs`
   (the default) holds one host fd open per file the guest accesses. In a
   monorepo with large `node_modules` trees this reaches tens of thousands of
-  fds and can exhaust macOS's per-process limit. Switch the VM to `9p`, which
-  opens and closes fds per-request instead:
+  fds and can exhaust macOS's per-process limit. Switch the VM to
+  `reverse-sshfs`, which opens and closes host fds per-request instead:
 
   ```sh
-  AGENTSB_MOUNT_TYPE=9p agentsb --reset
+  AGENTSB_MOUNT_TYPE=reverse-sshfs agentsb --reset
   ```
 
   `AGENTSB_MOUNT_TYPE` is baked in at VM creation time, so `--reset` is
