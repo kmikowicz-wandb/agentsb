@@ -179,7 +179,8 @@ def main() -> int:
     else:
         vm_workdir = "/workspace"
 
-    vm = LimaVM(vm_name, paths.base_template, mount_path, console)
+    mount_type = os.environ.get("AGENTSB_MOUNT_TYPE", "virtiofs")
+    vm = LimaVM(vm_name, paths.base_template, mount_path, console, mount_type=mount_type)
     runner = ProvisionRunner(vm, console)
     manager = AgentManager(registry, vm, runner, console)
     auth = AuthCoordinator(vm, console)

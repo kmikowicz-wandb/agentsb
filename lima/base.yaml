@@ -28,13 +28,14 @@ disk: "20GiB"
 
 param:
   WORKSPACE: "/tmp"
+  MOUNT_TYPE: "virtiofs"
 
 mounts:
   - location: "{{.Param.WORKSPACE}}"
     mountPoint: "/workspace"
     writable: true
 
-mountType: "virtiofs"
+mountType: "{{.Param.MOUNT_TYPE}}"
 
 portForwards: []
 

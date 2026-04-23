@@ -131,11 +131,12 @@ is created lazily on first `agentsb <AGENT>` invocation; no explicit
 
 ### Environment
 
-| Variable           | Purpose                                                  |
-|--------------------|----------------------------------------------------------|
-| `AGENTSB_VM`       | Override VM name (default `agentsb`). Use for per-project or per-task VMs. |
-| `AGENTSB_HOME`     | Installation root (auto-detected by the brew shim).     |
-| `AGENTSB_TEMPLATE` | Override template path (for local template dev).        |
+| Variable              | Purpose                                                  |
+|-----------------------|----------------------------------------------------------|
+| `AGENTSB_VM`          | Override VM name (default `agentsb`). Use for per-project or per-task VMs. |
+| `AGENTSB_HOME`        | Installation root (auto-detected by the brew shim).     |
+| `AGENTSB_TEMPLATE`    | Override template path (for local template dev).        |
+| `AGENTSB_MOUNT_TYPE`  | Filesystem mount type for the workspace: `virtiofs` (default, fast) or `9p` (lower host fd usage). Set at VM create time only. |
 
 Forwarded into the VM when set on the host:
 `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
@@ -214,3 +215,18 @@ and `pyyaml` in an ephemeral venv on first run and caches them for later.
   in `bin/agentsb` if you want more.
 - **First boot is slow** — yes, provision takes 2-5 min. Every subsequent
   start is ~3s. Don't `--reset` casually.
+- **Too many open files / `EMFILE` errors with large workspaces** — `virtiofs`
+  (the default) holds one host fd open per file the guest accesses. In a
+  monorepo with large `node_modules` trees this reaches tens of thousands of
+  fds and can exhaust macOS's per-process limit. Switch the VM to `9p`, which
+  opens and closes fds per-request instead:
+
+  ```sh
+  AGENTSB_MOUNT_TYPE=9p agentsb --reset
+  ```
+
+  `AGENTSB_MOUNT_TYPE` is baked in at VM creation time, so `--reset` is
+  required when changing it. The tradeoff is slower filesystem throughput
+  (~2–5×) on metadata-heavy operations (`git status`, TypeScript's file
+  scanner). For typical agent workloads — running builds and editing files —
+  it is not noticeable.

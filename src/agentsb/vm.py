@@ -28,11 +28,14 @@ class LimaVM:
         template: Path,
         workspace: Path,
         console: Console,
+        *,
+        mount_type: str = "virtiofs",
     ) -> None:
         self.name = name
         self._template = template
         self._workspace = workspace
         self._console = console
+        self._mount_type = mount_type
 
     # ---- lifecycle ----------------------------------------------------
 
@@ -49,12 +52,10 @@ class LimaVM:
     def ensure_running(self) -> None:
         s = self.status()
         if s == "Running":
-            self._suppress_host_indexing()
             return
         if s == "Stopped":
             self._console.rule(f"[cyan]Starting VM {self.name}[/cyan]")
             subprocess.run(["limactl", "start", self.name], check=True)
-            self._suppress_host_indexing()
             return
         if s in ("", "Broken"):
             self._console.print(Panel.fit(
@@ -68,10 +69,10 @@ class LimaVM:
                 ["limactl", "start", "--tty=false",
                  "--name", self.name,
                  "--set", f'.param.WORKSPACE = "{self._workspace}"',
+                 "--set", f'.param.MOUNT_TYPE = "{self._mount_type}"',
                  str(self._template)],
                 check=True,
             )
-            self._suppress_host_indexing()
             return
         raise AgentsbError(f"VM {self.name} in unexpected state: {s}")
 
@@ -79,40 +80,7 @@ class LimaVM:
         subprocess.run(["limactl", "stop", self.name])
 
     def destroy(self) -> None:
-        self._restore_host_indexing()
         subprocess.run(["limactl", "delete", "-f", self.name], capture_output=True)
-
-    # ---- host-side indexer suppression ------------------------------------
-
-    def _suppress_host_indexing(self) -> None:
-        """Tell Spotlight and Time Machine to ignore the workspace mount.
-
-        Both operations are idempotent and need no elevated privileges for
-        user-owned directories. Failures are silently ignored — these are
-        best-effort optimisations, not correctness requirements.
-        """
-        # Spotlight: a file named .metadata_never_index tells mds to skip
-        # the directory. Survives across VM restarts without re-running mdutil.
-        try:
-            (self._workspace / ".metadata_never_index").touch()
-        except OSError:
-            pass
-        # Time Machine: -p records a path string (does not follow renames).
-        subprocess.run(
-            ["tmutil", "addexclusion", "-p", str(self._workspace)],
-            capture_output=True,
-        )
-
-    def _restore_host_indexing(self) -> None:
-        """Undo Spotlight and Time Machine exclusions on VM teardown."""
-        try:
-            (self._workspace / ".metadata_never_index").unlink(missing_ok=True)
-        except OSError:
-            pass
-        subprocess.run(
-            ["tmutil", "removeexclusion", "-p", str(self._workspace)],
-            capture_output=True,
-        )
 
     # ---- inspection ----------------------------------------------------
 
