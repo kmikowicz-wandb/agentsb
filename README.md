@@ -159,6 +159,49 @@ Two options:
    agentsb claude
    ```
 
+### GitHub
+
+Because `~/.ssh` is not mounted, SSH-based git remotes won't work. Use HTTPS
+with a Personal Access Token instead.
+
+**Create a fine-grained PAT** at github.com → Settings → Developer settings →
+Personal access tokens → Fine-grained tokens. Permissions needed:
+
+- `Contents` → Read and write
+- `Metadata` → Read-only (auto-selected)
+- `Pull requests` → Read and write *(optional, for `gh` CLI PR operations)*
+
+**Configure git inside the VM** (via `agentsb --shell` or at agent startup):
+
+```sh
+git config --global credential.helper store
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+echo "https://<your-username>:<your-token>@github.com" > ~/.git-credentials
+```
+
+This persists in the VM disk — you only need to do it once per VM.
+
+**Clone with HTTPS URLs:**
+
+```sh
+git clone https://github.com/<owner>/<repo>.git
+```
+
+**Switch an existing SSH remote to HTTPS:**
+
+```sh
+git remote set-url origin https://github.com/<owner>/<repo>.git
+```
+
+**For the `gh` CLI**, set `GH_TOKEN` on the host — it is not auto-forwarded,
+so either export it before invoking `agentsb` or add it to your shell profile:
+
+```sh
+export GH_TOKEN=<your-token>
+agentsb claude
+```
+
 ## Recipes
 
 ```sh
