@@ -74,10 +74,14 @@ def _forced_mismatch(reg_path, vm_name, workspace):
     reg_path.write_text(json.dumps(data))
 
 
+_not_running = lambda _: False  # noqa: E731 — test helper, VMs are stopped
+
+
 def test_prune_noop_on_empty_registry(tmp_path):
     reg = VMRegistry(path=tmp_path / "registry.json")
     destroyed: list[str] = []
-    p = Pruner(reg, console, destroy_fn=lambda n: destroyed.append(n) or 0)
+    p = Pruner(reg, console, is_running_fn=_not_running,
+               destroy_fn=lambda n: destroyed.append(n) or 0)
     assert p.prune() == []
     assert destroyed == []
 
@@ -89,7 +93,7 @@ def test_prune_leaves_live_entries_alone(tmp_path):
     _register(VMRegistry(path=reg_path), "vm-live", ws)
 
     destroyed: list[str] = []
-    p = Pruner(VMRegistry(path=reg_path), console,
+    p = Pruner(VMRegistry(path=reg_path), console, is_running_fn=_not_running,
                destroy_fn=lambda n: destroyed.append(n) or 0)
     pruned = p.prune()
     assert pruned == []
@@ -106,7 +110,7 @@ def test_prune_removes_entries_with_missing_directories(tmp_path):
     ws.rmdir()  # directory is gone
 
     destroyed: list[str] = []
-    p = Pruner(VMRegistry(path=reg_path), console,
+    p = Pruner(VMRegistry(path=reg_path), console, is_running_fn=_not_running,
                destroy_fn=lambda n: destroyed.append(n) or 0)
     pruned = p.prune()
 
@@ -122,7 +126,7 @@ def test_prune_removes_entries_with_mismatched_inode(tmp_path):
     _forced_mismatch(reg_path, "vm-replaced", ws)
 
     destroyed: list[str] = []
-    p = Pruner(VMRegistry(path=reg_path), console,
+    p = Pruner(VMRegistry(path=reg_path), console, is_running_fn=_not_running,
                destroy_fn=lambda n: destroyed.append(n) or 0)
     pruned = p.prune()
 
@@ -139,12 +143,32 @@ def test_prune_keeps_registry_entry_when_destroy_fails(tmp_path):
     _register(VMRegistry(path=reg_path), "vm-stubborn", ws)
     ws.rmdir()
 
-    p = Pruner(VMRegistry(path=reg_path), console,
+    p = Pruner(VMRegistry(path=reg_path), console, is_running_fn=_not_running,
                destroy_fn=lambda n: 1)   # always "fail"
     pruned = p.prune()
 
     assert pruned == []
     assert any(e.vm_name == "vm-stubborn" for e in VMRegistry(path=reg_path).all())
+
+
+def test_prune_stops_running_vm_before_destroy(tmp_path):
+    """If a VM is running, it should be stopped before being destroyed."""
+    reg_path = tmp_path / "registry.json"
+    ws = tmp_path / "gone"
+    ws.mkdir()
+    _register(VMRegistry(path=reg_path), "vm-running", ws)
+    ws.rmdir()
+
+    stopped: list[str] = []
+    destroyed: list[str] = []
+    p = Pruner(VMRegistry(path=reg_path), console,
+               is_running_fn=lambda _: True,
+               stop_fn=lambda n: stopped.append(n) or 0,
+               destroy_fn=lambda n: destroyed.append(n) or 0)
+    p.prune()
+
+    assert stopped == ["vm-running"]
+    assert destroyed == ["vm-running"]
 
 
 def test_prune_mixed_live_and_orphaned(tmp_path):
@@ -160,7 +184,7 @@ def test_prune_mixed_live_and_orphaned(tmp_path):
     dead.rmdir()
 
     destroyed: list[str] = []
-    p = Pruner(VMRegistry(path=reg_path), console,
+    p = Pruner(VMRegistry(path=reg_path), console, is_running_fn=_not_running,
                destroy_fn=lambda n: destroyed.append(n) or 0)
     pruned = p.prune()
 

@@ -1,6 +1,9 @@
 """Tests for the CLI layer: argparse wiring, env forwarding."""
 from __future__ import annotations
 
+import shutil
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from agentsb import cli
@@ -99,3 +102,27 @@ def test_forwarded_env_pairs_empty_when_nothing_set(monkeypatch):
     for k in cli.FORWARDED_ENV:
         monkeypatch.delenv(k, raising=False)
     assert cli.forwarded_env_pairs() == []
+
+
+# -------------------- disk-check does not prune -------------------------
+
+def test_disk_check_does_not_call_pruner(monkeypatch):
+    """The daily cron job must never delete VMs — only mark for resize."""
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/limactl")
+    monkeypatch.setattr("sys.argv", ["agentsb", "--disk-check"])
+
+    paths_mock = MagicMock()
+    paths_mock.base_template.exists.return_value = True
+    agent_registry_mock = MagicMock()
+    agent_registry_mock.list.return_value = []
+    check_mock = MagicMock()
+
+    with patch("agentsb.cli.Paths", return_value=paths_mock), \
+         patch("agentsb.cli.AgentRegistry", return_value=agent_registry_mock), \
+         patch("agentsb.cli.VMRegistry"), \
+         patch("agentsb.cli.Pruner") as MockPruner, \
+         patch("agentsb.cli.check_and_mark_all", check_mock):
+        cli.main()
+
+    MockPruner.return_value.prune.assert_not_called()
+    check_mock.assert_called_once()

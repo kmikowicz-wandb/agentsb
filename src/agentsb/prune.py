@@ -68,11 +68,13 @@ class Pruner:
         registry: VMRegistry,
         console: Console,
         *,
+        is_running_fn: Callable[[str], bool] = _limactl_is_running,
         stop_fn: Callable[[str], int] = _limactl_stop,
         destroy_fn: Callable[[str], int] = _limactl_delete,
     ) -> None:
         self._registry = registry
         self._console = console
+        self._is_running = is_running_fn
         self._stop = stop_fn
         self._destroy = destroy_fn
 
@@ -88,7 +90,7 @@ class Pruner:
                 f"[yellow]→ pruning[/yellow] [bold]{e.vm_name}[/bold]  "
                 f"[dim]{e.workspace_path}[/dim]  [red]({reason})[/red]"
             )
-            if _limactl_is_running(e.vm_name):
+            if self._is_running(e.vm_name):
                 self._console.print(f"  [cyan]stopping {e.vm_name}...[/cyan]")
                 self._stop(e.vm_name)
             rc = self._destroy(e.vm_name)

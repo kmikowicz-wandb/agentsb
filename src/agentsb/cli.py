@@ -145,7 +145,6 @@ def main() -> int:
         Pruner(VMRegistry(), console).prune()
         return 0
     if ns.mode == "disk-check":
-        Pruner(VMRegistry(), console).prune()
         check_and_mark_all(VMRegistry(), console)
         return 0
 
