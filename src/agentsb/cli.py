@@ -5,6 +5,7 @@ import argparse
 import atexit
 import os
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -18,7 +19,6 @@ from .claude_sync import ClaudeConfigSync
 from .completion import install as install_completion
 from .disk import check_and_mark_all, drain_pending, resize_cli
 from .errors import AgentsbError
-from .host_firewall import ensure_firewall
 from .paths import Paths
 from .provision import ProvisionRunner
 from .prune import Pruner
@@ -194,7 +194,7 @@ def main() -> int:
                 die("AGENT required. Run `agentsb --help` for usage.", code=2)
             drain_pending(vm, console)
             vm.ensure_running()
-            ensure_firewall(console)
+            subprocess.run([str(Paths().lima_dir / "host_firewall.sh")], check=True)
             manager.ensure_installed(agent)
             auth.ensure_authed(agent, registry.fragment(agent))
             if ns.with_claude_config:
@@ -213,7 +213,7 @@ def main() -> int:
         elif ns.mode == "shell":
             drain_pending(vm, console)
             vm.ensure_running()
-            ensure_firewall(console)
+            subprocess.run([str(Paths().lima_dir / "host_firewall.sh")], check=True)
             if ns.with_claude_config:
                 claude_sync.sync()
             vm.launch(workdir=vm_workdir)
