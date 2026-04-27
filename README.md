@@ -139,25 +139,78 @@ is created lazily on first `agentsb <AGENT>` invocation; no explicit
 | `AGENTSB_MOUNT_TYPE`  | Filesystem mount type for the workspace: `virtiofs` (default, fast) or `reverse-sshfs` (lower host fd usage). Set at VM create time only. |
 
 Forwarded into the VM when set on the host:
-`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
-`OPENAI_API_KEY`, `NO_COLOR`, `TERM`.
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`,
+`NO_COLOR`, `TERM`.
+
+`CLAUDE_CODE_OAUTH_TOKEN` is auto-extracted from
+`~/.claude/.credentials.json` if not already set in the environment.
 
 ## Authentication
 
-Because `$HOME` is not mounted, the VM does not see your host Keychain.
-Two options:
+Because `$HOME` is not mounted, the VM does not see your host Keychain or
+credential files. agentsb bridges this by injecting credentials into the VM
+as environment variables — in memory only, never written to the VM's disk.
 
-1. **Log in once per VM** (persists in the VM disk):
-   ```sh
-   agentsb claude /login
-   agentsb codex login
-   ```
-2. **Env var** on the host — forwarded automatically:
-   ```sh
-   export ANTHROPIC_API_KEY=...
-   export OPENAI_API_KEY=...
-   agentsb claude
-   ```
+### Per-agent summary
+
+| Agent | Credential needed | How it gets in | Friction |
+|-------|-------------------|----------------|---------|
+| **claude** | OAuth token or API key | Auto-extracted from `~/.claude/.credentials.json`; or set `ANTHROPIC_API_KEY` | **Zero** — automatic |
+| **codex** | `OPENAI_API_KEY` | Set on host, forwarded automatically | Zero if env var is set |
+| **aider** | Provider API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …) | Set on host, forwarded automatically | Zero for Anthropic/OpenAI; others need key set |
+| **forge** | Provider API key (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`) | Set on host, forwarded automatically | Zero if env var is set; interactive prompt if not |
+
+### Claude
+
+agentsb automatically reads `~/.claude/.credentials.json` on the host and
+injects the OAuth access token as `CLAUDE_CODE_OAUTH_TOKEN` into the VM.
+No manual setup or re-login is needed across VM resets and ephemeral runs.
+
+The token is passed as an environment variable — it is never copied to the
+VM's filesystem. Explicit env vars always take precedence:
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-...   # API key takes precedence if set
+# or
+export CLAUDE_CODE_OAUTH_TOKEN=...    # explicit token overrides auto-extract
+agentsb claude
+```
+
+If neither is available (fresh machine, no `~/.claude/` directory), Claude
+will prompt for login on first launch and store credentials in the VM disk
+for that VM's lifetime.
+
+### Codex
+
+Set `OPENAI_API_KEY` on the host; it is forwarded automatically. Codex has
+no interactive login fallback — it will fail immediately if the key is absent.
+
+```sh
+export OPENAI_API_KEY=sk-...
+agentsb codex
+```
+
+### Aider
+
+Aider is model-agnostic. `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are
+forwarded automatically. For other providers (Gemini, Groq, etc.) set the
+relevant key on the host before invoking agentsb.
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-...
+agentsb aider foo.py
+```
+
+### Forge
+
+Forge uses an Anthropic or OpenAI key. `ANTHROPIC_API_KEY` and
+`OPENAI_API_KEY` are forwarded automatically. If neither is set, Forge
+will prompt interactively on first launch.
+
+```sh
+export ANTHROPIC_API_KEY=sk-ant-...
+agentsb forge
+```
 
 ### GitHub
 

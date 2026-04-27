@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import json
 import os
 import shutil
 import subprocess
@@ -42,8 +43,26 @@ FORWARDED_ENV = (
 console = Console(stderr=True, highlight=False)
 
 
+def _claude_oauth_token() -> str | None:
+    """Read Claude OAuth access token from host ~/.claude/.credentials.json."""
+    creds = Path.home() / ".claude" / ".credentials.json"
+    if not creds.exists():
+        return None
+    try:
+        data = json.loads(creds.read_text())
+        token = (data.get("claudeAiOauth") or {}).get("accessToken")
+        return str(token) if token else None
+    except Exception:
+        return None
+
+
 def forwarded_env_pairs() -> list[str]:
-    return [f"{k}={os.environ[k]}" for k in FORWARDED_ENV if os.environ.get(k)]
+    pairs = [f"{k}={os.environ[k]}" for k in FORWARDED_ENV if os.environ.get(k)]
+    if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        token = _claude_oauth_token()
+        if token:
+            pairs.append(f"CLAUDE_CODE_OAUTH_TOKEN={token}")
+    return pairs
 
 
 def die(msg: str, code: int = 1) -> NoReturn:
