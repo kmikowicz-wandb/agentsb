@@ -11,11 +11,12 @@ with your host system. You rely on the validity of that system
 to design good security profiles, and are bound to its security UX.
 Most coding agents could safely complete their work in a thin
 container. On Linux you could build a firejail or bubblejail
-around your workspaces.
+around your workspaces, which is what Codex and Claude Code do.
 
 Unfortunately we sometimes have to work on Mac OS which doesn't
-support containers in the big 26.  Codex comes close to a sane solution using "Sandbox mode"
-implemented over Seatbelt. Seatbelt is deprecated.
+support containers in the big 26.  Existing "Sandbox mode" features are
+implemented over Seatbelt. Seatbelt is deprecated. Even then your $HOME is exposed
+fully to the coding agent.
 
 This project takes a different approach. Run coding agents (Claude Code, Codex, Aider, Forge) inside isolated Lima VMs
 on macOS. Reduce the blast radius of prompt-injection attacks by keeping the
