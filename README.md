@@ -68,7 +68,8 @@ What it does **not** give you:
 ## Install
 
 ```sh
-brew install kmikowicz/agentsb/agentsb
+brew tap kmikowicz/agentsb
+brew install agentsb
 ```
 
 The formula installs:
