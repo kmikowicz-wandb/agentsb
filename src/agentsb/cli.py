@@ -27,6 +27,8 @@ from .vm import LimaVM
 from .workspace import VMRegistry, WorkspaceResolver
 
 
+SUBCOMMANDS = frozenset({"prune", "shell", "stop", "reset", "status", "disk-check"})
+
 FORWARDED_ENV = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -74,11 +76,23 @@ def build_parser(agents: list[str]) -> argparse.ArgumentParser:
     agents_line = ", ".join(agents) if agents else "(none configured)"
     p = argparse.ArgumentParser(
         prog="agentsb",
+        usage="agentsb [options] COMMAND | AGENT [agent-args]",
         description=(
             "Run coding agents in an isolated Lima VM. One shared VM with lazy "
             "agent install; each agent's install runs on its first invocation."
         ),
-        epilog=f"Agents available: {agents_line}",
+        epilog=(
+            "Commands:\n"
+            "  prune        delete registered VMs whose source directory no longer exists\n"
+            "  shell        open an interactive VM shell at /workspace\n"
+            "  stop         stop the VM\n"
+            "  reset        destroy and recreate the VM\n"
+            "  status       show VM status\n"
+            "  disk-check   mark VMs over 80%% disk usage for resize on next start\n"
+            "  resize VM    resize a VM's disk\n"
+            "\n"
+            f"Agents available: {agents_line}"
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("-w", "--workspace", default=os.getcwd(),
@@ -93,49 +107,43 @@ def build_parser(agents: list[str]) -> argparse.ArgumentParser:
                    nargs="?", const="auto", default=None, metavar="SHELL",
                    help="install shell completion for bash/zsh/fish "
                         "(auto-detects from $SHELL when SHELL omitted)")
-    g = p.add_mutually_exclusive_group()
-    g.add_argument("--shell", action="store_const", dest="mode", const="shell",
-                   help="open interactive VM shell at /workspace")
-    g.add_argument("--stop", action="store_const", dest="mode", const="stop",
-                   help="stop the VM")
-    g.add_argument("--reset", action="store_const", dest="mode", const="reset",
-                   help="destroy and recreate the VM")
-    g.add_argument("--status", action="store_const", dest="mode", const="status",
-                   help="show VM status")
-    g.add_argument("--prune", action="store_const", dest="mode", const="prune",
-                   help="delete registered VMs whose source directory no longer exists")
-    g.add_argument("--disk-check", action="store_const", dest="mode", const="disk-check",
-                   help="mark registered VMs over 80%% disk usage for resize on next start")
-    p.set_defaults(mode="run")
     return p
 
 
-def parse(argv: list[str], agents: list[str]) -> tuple[argparse.Namespace, str | None, list[str]]:
+def parse(
+    argv: list[str], agents: list[str],
+) -> tuple[argparse.Namespace, str | None, str | None, list[str]]:
+    """Return (namespace, subcommand_or_None, agent_or_None, agent_args)."""
     parser = build_parser(agents)
     ns, rest = parser.parse_known_args(argv)
 
-    agent: str | None = None
-    agent_idx: int | None = None
-    for i, tok in enumerate(rest):
-        if tok in agents:
-            agent = tok
-            agent_idx = i
-            break
+    # Drop bare '--' separators from the front; keep them in agent_args.
+    positionals = [t for t in rest if t != "--"]
+    if not positionals:
+        return ns, None, None, []
 
-    if agent_idx is None:
-        stray = [t for t in rest if t != "--"]
+    first = positionals[0]
+
+    if first in SUBCOMMANDS:
+        stray = positionals[1:]
         if stray:
-            die(f"unknown flag or agent: {stray[0]!r} (agents: {', '.join(agents)})")
-        return ns, None, []
+            die(f"unexpected arguments after '{first}': {stray[0]!r}")
+        return ns, first, None, []
 
-    before = [t for t in rest[:agent_idx] if t != "--"]
-    if before:
-        die(f"unknown flag: {before[0]!r}")
+    if first in agents:
+        # Everything after the agent name (and an optional '--') is passed through.
+        idx = rest.index(first)
+        agent_args = rest[idx + 1:]
+        if agent_args and agent_args[0] == "--":
+            agent_args = agent_args[1:]
+        return ns, None, first, agent_args
 
-    agent_args = rest[agent_idx + 1:]
-    if agent_args and agent_args[0] == "--":
-        agent_args = agent_args[1:]
-    return ns, agent, agent_args
+    if first.startswith("-"):
+        die(f"unknown option: {first!r}")
+    else:
+        all_cmds = ", ".join(sorted(SUBCOMMANDS))
+        die(f"unknown command or agent: {first!r} "
+            f"(commands: {all_cmds}; agents: {', '.join(agents)})")
 
 
 def main() -> int:
@@ -154,16 +162,16 @@ def main() -> int:
         die(f"base template missing: {paths.base_template}")
 
     registry = AgentRegistry(paths)
-    ns, agent, agent_args = parse(sys.argv[1:], registry.list())
+    ns, subcommand, agent, agent_args = parse(sys.argv[1:], registry.list())
 
     # Workspace-independent maintenance ops: handle before we require a
     # valid workspace or do any resolver work.
     if ns.install_completion is not None:
         return install_completion(ns.install_completion, console)
-    if ns.mode == "prune":
+    if subcommand == "prune":
         Pruner(VMRegistry(), console).prune()
         return 0
-    if ns.mode == "disk-check":
+    if subcommand == "disk-check":
         check_and_mark_all(VMRegistry(), console)
         return 0
 
@@ -208,14 +216,14 @@ def main() -> int:
         atexit.register(vm.destroy)
 
     try:
-        if ns.mode == "run":
-            if agent is None:
-                die("AGENT required. Run `agentsb --help` for usage.", code=2)
+        if agent is not None:
             drain_pending(vm, console)
             vm.ensure_running()
             subprocess.run([str(Paths().lima_dir / "host_firewall.sh")], check=True)
             manager.ensure_installed(agent)
             auth.ensure_authed(agent, registry.fragment(agent))
+            if agent == "claude":
+                claude_sync.sync_credentials()
             if ns.with_claude_config:
                 claude_sync.sync()
             if ns.auto:
@@ -229,20 +237,22 @@ def main() -> int:
                 workdir=vm_workdir,
                 env=forwarded_env_pairs() + auto_env,
             )
-        elif ns.mode == "shell":
+        elif subcommand == "shell":
             drain_pending(vm, console)
             vm.ensure_running()
             subprocess.run([str(Paths().lima_dir / "host_firewall.sh")], check=True)
             if ns.with_claude_config:
                 claude_sync.sync()
             vm.launch(workdir=vm_workdir)
-        elif ns.mode == "stop":
+        elif subcommand == "stop":
             vm.stop()
-        elif ns.mode == "reset":
+        elif subcommand == "reset":
             vm.destroy()
             vm.ensure_running()
-        elif ns.mode == "status":
+        elif subcommand == "status":
             print(vm.status() or "(no VM)")
+        else:
+            die("COMMAND or AGENT required. Run `agentsb --help` for usage.", code=2)
     except AgentsbError as e:
         die(str(e))
 
