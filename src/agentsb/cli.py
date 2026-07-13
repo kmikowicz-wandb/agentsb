@@ -16,6 +16,7 @@ from rich.console import Console
 
 from .agents import AgentManager, AgentRegistry
 from .auth import AuthCoordinator
+from .aider_sync import AiderConfigSync
 from .claude_sync import ClaudeConfigSync
 from .completion import install as install_completion
 from .disk import check_and_mark_all, drain_pending, resize_cli
@@ -211,6 +212,7 @@ def main() -> int:
     manager = AgentManager(registry, vm, runner, console)
     auth = AuthCoordinator(vm, console)
     claude_sync = ClaudeConfigSync(vm, console)
+    aider_sync = AiderConfigSync(vm, console)
 
     if ns.ephemeral:
         atexit.register(vm.destroy)
@@ -224,6 +226,8 @@ def main() -> int:
             auth.ensure_authed(agent, registry.fragment(agent))
             if agent == "claude":
                 claude_sync.sync_credentials()
+            if agent == "aider":
+                aider_sync.sync()
             if ns.with_claude_config:
                 claude_sync.sync()
             if ns.auto:

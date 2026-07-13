@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from rich.console import Console
+
 from .vm import LimaVM
-from .console import Console
 
 
 class AiderConfigSync:
@@ -23,14 +24,14 @@ class AiderConfigSync:
     VM_DEST = "/workspace/.aider.conf.yml"
 
     def __init__(self, vm: LimaVM, console: Console) -> None:
-        self.vm = vm
-        self.console = console
+        self._vm = vm
+        self._console = console
 
     def sync(self) -> None:
         source = Path.home() / self.CONFIG_NAME
         if not source.exists():
-            self.console.debug(f"No host Aider config found at {source}; skipping sync.")
             return
 
-        self.console.info(f"Copying Aider config from {source} into VM...")
-        self.vm.copy_in(source, self.VM_DEST)
+        self._console.print(f"[cyan]Copying Aider config from {source} into VM…[/cyan]")
+        self._vm.copy_in(source, self.VM_DEST)
+        self._console.print("[green]✓[/green] Aider config synced")
