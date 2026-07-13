@@ -24,6 +24,14 @@ class ClaudeConfigSync:
         self._vm = vm
         self._console = console
 
+    def sync_credentials(self) -> None:
+        """Copy host ~/.claude/.credentials.json into the VM for claude.ai OAuth auth."""
+        src = Path.home() / ".claude" / ".credentials.json"
+        if not src.exists():
+            return
+        self._vm.mkdir(".claude")
+        self._vm.copy_in(src, ".claude/")
+
     def sync(self) -> None:
         src_root = Path.home() / ".claude"
         if not src_root.is_dir():
