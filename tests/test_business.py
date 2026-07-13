@@ -9,6 +9,7 @@ from rich.console import Console
 from agentsb import vm as vm_mod
 from agentsb.agents import AgentManager, AgentRegistry
 from agentsb.auth import AuthCoordinator
+from agentsb.aider_sync import AiderConfigSync
 from agentsb.claude_sync import ClaudeConfigSync
 from agentsb.errors import AgentsbError
 from agentsb.paths import Paths
@@ -296,6 +297,29 @@ def test_claude_sync_copies_only_present_items(monkeypatch, tmp_path):
     assert "CLAUDE.md" in copied_names
     assert "commands" in copied_names
     assert "settings.json" not in copied_names
+
+
+# -------------------- AiderConfigSync ------------------------------------
+
+def test_aider_sync_noop_when_config_absent(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    vm = FakeVM()
+    AiderConfigSync(vm, console).sync()
+    assert vm.copy_calls == []
+    assert vm.mkdir_calls == []
+
+
+def test_aider_sync_copies_config_when_present(monkeypatch, tmp_path):
+    (tmp_path / ".aider.conf.yml").write_text("model: gpt-4o\n")
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    vm = FakeVM()
+    AiderConfigSync(vm, console).sync()
+
+    assert len(vm.copy_calls) == 1
+    src, dest = vm.copy_calls[0]
+    assert src == tmp_path / ".aider.conf.yml"
+    assert dest == "/workspace/.aider.conf.yml"
 
 
 # -------------------- AuthCoordinator ------------------------------------
