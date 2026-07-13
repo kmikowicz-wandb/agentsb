@@ -152,10 +152,11 @@ class LimaVM:
         )
 
     def copy_in(self, src: Path, dest: str) -> None:
-        subprocess.run(
-            ["limactl", "copy", "-r", str(src), f"{self.name}:{dest}"],
-            check=True, capture_output=True,
-        )
+        cmd = ["limactl", "copy"]
+        if src.is_dir():
+            cmd.append("-r")
+        cmd += [str(src), f"{self.name}:{dest}"]
+        subprocess.run(cmd, check=True, capture_output=True)
 
     def launch(
         self,

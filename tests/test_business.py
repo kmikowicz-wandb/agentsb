@@ -143,6 +143,24 @@ def test_lima_vm_exec_script_user_mode_no_sudo(monkeypatch):
     assert "sudo" not in seen[-1]
 
 
+def test_lima_vm_copy_in_omits_recursive_flag_for_file(monkeypatch, tmp_path):
+    src = tmp_path / "config.yml"
+    src.write_text("key: value\n")
+    seen = []
+    _mock_subprocess(monkeypatch, lambda argv, kw: (seen.append(argv) or _R(0)))
+    _make_vm().copy_in(src, "/workspace/config.yml")
+    assert "-r" not in seen[-1]
+
+
+def test_lima_vm_copy_in_uses_recursive_flag_for_directory(monkeypatch, tmp_path):
+    src = tmp_path / "adir"
+    src.mkdir()
+    seen = []
+    _mock_subprocess(monkeypatch, lambda argv, kw: (seen.append(argv) or _R(0)))
+    _make_vm().copy_in(src, "/workspace/adir")
+    assert "-r" in seen[-1]
+
+
 # -------------------- ProvisionRunner + AgentManager --------------------
 
 class FakeVM:
