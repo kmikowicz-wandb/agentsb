@@ -1,8 +1,8 @@
 class Agentsb < Formula
   desc "Run coding agents (claude, codex, aider, forge) in isolated Lima VMs"
-  homepage "https://github.com/kmikowicz/agentsb"
+  homepage "https://github.com/kmikowicz-wandb/agentsb"
   license "MIT"
-  head "https://github.com/kmikowicz/agentsb.git", using: :git, branch: "main"
+  head "https://github.com/kmikowicz-wandb/agentsb.git", using: :git, branch: "main"
 
   depends_on "lima"
   depends_on "uv"
