@@ -37,10 +37,11 @@ from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 
+from . import AGENTSB_DIR
 from .errors import AgentsbError
 
 
-REGISTRY_DEFAULT = Path.home() / ".agentsb" / "registry.json"
+REGISTRY_DEFAULT = AGENTSB_DIR / "registry.json"
 
 
 # ============================================================================

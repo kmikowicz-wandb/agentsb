@@ -1,6 +1,7 @@
 """AgentRegistry + AgentManager — discovery and lazy installation of agents."""
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -30,6 +31,7 @@ class AgentRegistry:
     def has(self, name: str) -> bool:
         return self._paths.agent_fragment(name).is_file()
 
+    @lru_cache(maxsize=32)
     def fragment(self, name: str) -> Path:
         if not self.has(name):
             raise KeyError(f"no fragment for agent: {name}")

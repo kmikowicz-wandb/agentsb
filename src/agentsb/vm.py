@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 from typing import NoReturn
 
@@ -91,6 +92,19 @@ class LimaVM:
             capture_output=True,
         )
         return r.returncode == 0
+
+    @contextmanager
+    def running(self):
+        """Context manager: ensures VM is running, yields control, leaves running."""
+        was_running = self.status() == "Running"
+        if not was_running:
+            self.ensure_running()
+        try:
+            yield
+        finally:
+            # Only stop if we started it (don't interrupt user's running VM)
+            if not was_running:
+                self.stop()
 
     # ---- execution -----------------------------------------------------
 

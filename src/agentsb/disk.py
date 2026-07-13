@@ -31,8 +31,17 @@ from .vm import LimaVM
 THRESHOLD_PCT = 80
 GROWTH_FACTOR = 1.5
 
+
+# ---- helpers --------------------------------------------------------------
+
+def should_resize(usage_pct: int | None, threshold: int = THRESHOLD_PCT) -> bool:
+    """Return True if usage_pct indicates resize is needed."""
+    return usage_pct is not None and usage_pct >= threshold
+
+from . import AGENTSB_DIR
+
 _LIMA_HOME = Path.home() / ".lima"
-_PENDING_DIR = Path.home() / ".agentsb" / "pending-resize"
+_PENDING_DIR = AGENTSB_DIR / "pending-resize"
 _QCOW2_MAGIC = b"QFI\xfb"
 
 
